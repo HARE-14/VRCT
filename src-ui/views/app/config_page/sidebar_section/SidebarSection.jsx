@@ -52,8 +52,6 @@ export const SidebarSection = () => {
                         <Tab tab_id="advanced_settings" isSmall={currentIsBreakPoint.data} isHovered={isHovered} />
                     </div>
                     <div className={styles.separated_tabs_wrapper}>
-                        <Tab tab_id="supporters" isSmall={currentIsBreakPoint.data} isHovered={isHovered} />
-                        <Tab tab_id="about_vrct" isSmall={currentIsBreakPoint.data} isHovered={isHovered} />
                     </div>
                 </div>
                 <VersionLabel isCompact={isCompact} />

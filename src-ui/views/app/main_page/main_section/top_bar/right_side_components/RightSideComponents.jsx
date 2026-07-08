@@ -103,7 +103,7 @@ const SoftwareUpdateAvailableButton = () => {
     const { currentLatestSoftwareVersionInfo } = useSoftwareVersion();
     const { updateOpenedQuickSetting } = useStore_OpenedQuickSetting();
 
-    if (currentLatestSoftwareVersionInfo.data.is_update_available === false) return null;
+    if (true) return null; // Update alarm disabled for custom build
 
     return (
         <button className={styles.software_update_button} onClick={()=>updateOpenedQuickSetting("update_software")}>

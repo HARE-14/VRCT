@@ -8,7 +8,7 @@ import {
 } from "@store";
 import { useStdoutToPython } from "@useStdoutToPython";
 
-const playMicSound = (isOn) => {
+const playMicSound = (isOn, type) => {
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = ctx.createOscillator();
@@ -18,15 +18,20 @@ const playMicSound = (isOn) => {
         gain.connect(ctx.destination);
 
         const now = ctx.currentTime;
+        
+        let baseFreq = 440; // Default (Voice2Chatbox)
+        if (type === "translation") baseFreq = 523.25; // Higher pitch for Translation
+        if (type === "transcription_receive") baseFreq = 329.63; // Lower pitch for Speaker2Log
+
         if (isOn) {
-            osc.frequency.setValueAtTime(440, now);
-            osc.frequency.setValueAtTime(600, now + 0.1);
+            osc.frequency.setValueAtTime(baseFreq, now);
+            osc.frequency.setValueAtTime(baseFreq * 1.36, now + 0.1);
             gain.gain.setValueAtTime(0, now);
             gain.gain.linearRampToValueAtTime(0.1, now + 0.02);
             gain.gain.linearRampToValueAtTime(0, now + 0.2);
         } else {
-            osc.frequency.setValueAtTime(440, now);
-            osc.frequency.setValueAtTime(300, now + 0.1);
+            osc.frequency.setValueAtTime(baseFreq, now);
+            osc.frequency.setValueAtTime(baseFreq * 0.68, now + 0.1);
             gain.gain.setValueAtTime(0, now);
             gain.gain.linearRampToValueAtTime(0.1, now + 0.02);
             gain.gain.linearRampToValueAtTime(0, now + 0.2);
@@ -66,8 +71,8 @@ export const useMainFunction = () => {
     const createTogglePair = (pendingFn, updateFn, endpointName) => {
         const setFn = (to_enable) => {
             pendingFn();
-            if (endpointName === "transcription_send") {
-                playMicSound(to_enable);
+            if (endpointName !== "translation") {
+                playMicSound(to_enable, endpointName);
             }
             if (to_enable) {
                 asyncStdoutToPython(`/set/enable/${endpointName}`);
