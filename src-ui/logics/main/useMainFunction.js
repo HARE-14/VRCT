@@ -8,6 +8,36 @@ import {
 } from "@store";
 import { useStdoutToPython } from "@useStdoutToPython";
 
+const playMicSound = (isOn) => {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        const now = ctx.currentTime;
+        if (isOn) {
+            osc.frequency.setValueAtTime(440, now);
+            osc.frequency.setValueAtTime(600, now + 0.1);
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.1, now + 0.02);
+            gain.gain.linearRampToValueAtTime(0, now + 0.2);
+        } else {
+            osc.frequency.setValueAtTime(440, now);
+            osc.frequency.setValueAtTime(300, now + 0.1);
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.1, now + 0.02);
+            gain.gain.linearRampToValueAtTime(0, now + 0.2);
+        }
+        osc.start(now);
+        osc.stop(now + 0.2);
+    } catch (e) {
+        console.error("Audio play failed", e);
+    }
+};
+
 export const useMainFunction = () => {
     const appWindow = store.appWindow;
 
@@ -36,6 +66,9 @@ export const useMainFunction = () => {
     const createTogglePair = (pendingFn, updateFn, endpointName) => {
         const setFn = (to_enable) => {
             pendingFn();
+            if (endpointName === "transcription_send") {
+                playMicSound(to_enable);
+            }
             if (to_enable) {
                 asyncStdoutToPython(`/set/enable/${endpointName}`);
             } else {
