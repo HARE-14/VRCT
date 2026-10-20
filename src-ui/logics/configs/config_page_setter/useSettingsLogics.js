@@ -127,6 +127,11 @@ export const useSettingsLogics = (settingsArray, Category) => {
             continue;
         }
 
+        if (s.logics_template_id === "get_only") {
+            result[getExportName] = buildGet();
+            continue;
+        }
+
         if (s.logics_template_id === "get_set") {
             result[getExportName] = buildGet();
             result[setExportName] = buildSet();
@@ -237,10 +242,6 @@ export const useSliderLogic = ({
     marks_step,
     setter_timing = "on_change_committed",
 }) => {
-    if (marks_step === undefined) {
-        marks_step = step;
-    }
-
     const [ui_value, setUiValue] = useState(variable);
     const debounceTimerRef = useRef(null);
 
@@ -262,44 +263,71 @@ export const useSliderLogic = ({
         };
     }, []);
 
-    const decimalPlaces = marks_step.toString().includes('.')
-        ? marks_step.toString().split('.')[1].length
-        : 0;
-
-    const labelFormatter = useCallback((value) => {
-        if (show_label_values && show_label_values.length > 0) {
-            return show_label_values.includes(value) ? value : "";
-        }
-
-        return value.toFixed(decimalPlaces);
-    }, [show_label_values, decimalPlaces]);
-
     const marks = useMemo(() => {
-        if (show_label_values === null) {
+        if (show_label_values === null && marks_step === undefined) {
             return null;
         }
-        return createMarks(min, max, marks_step, labelFormatter);
-    }, [min, max, marks_step, labelFormatter, show_label_values]);
+
+        const markMap = new Map();
+
+        // 1. marks_step が明示的に指定されている場合、min から max まで marks_step 刻みで目盛りを生成
+        if (marks_step !== undefined && marks_step > 0) {
+            const decimalPlaces = marks_step.toString().includes('.')
+                ? marks_step.toString().split('.')[1].length
+                : 0;
+
+            let current = min;
+            for (let i = 0; i <= 1000; i++) {
+                if (current > max + (marks_step / 10)) break;
+                const fixedValue = parseFloat(current.toFixed(decimalPlaces));
+                const hasLabel = show_label_values && show_label_values.includes(fixedValue);
+                markMap.set(fixedValue, {
+                    value: fixedValue,
+                    label: hasLabel ? `${fixedValue}` : "",
+                });
+                current += marks_step;
+            }
+        }
+
+        // 2. show_label_values が指定されている場合、その値は必ず mark として含める（label付き）
+        if (show_label_values && Array.isArray(show_label_values)) {
+            for (const val of show_label_values) {
+                if (val >= min && val <= max) {
+                    markMap.set(val, {
+                        value: val,
+                        label: `${val}`,
+                    });
+                }
+            }
+        }
+
+        return Array.from(markMap.values()).sort((a, b) => a.value - b.value);
+    }, [min, max, marks_step, show_label_values]);
+
+    // setter_timing の値によってuseCallbackの呼び出し数が変わるとHooksルール違反になるため、
+    // 常に同数のuseCallbackを呼び出し、公開する関数だけをsetter_timingで切り替える
+    const onChangeForOnChange = useCallback((value) => {
+        setUiValue(value);
+        debouncedSetter(value);
+    }, [debouncedSetter]);
+
+    const onChangeForCommitted = useCallback((value) => {
+        setUiValue(value);
+    }, []);
+
+    const onChangeCommittedForCommitted = useCallback((value) => {
+        setterFunction(value);
+    }, [setterFunction]);
 
     let onChangeFunction;
     let onChangeCommittedFunction;
 
     if (setter_timing === "on_change") {
-        onChangeFunction = useCallback((value) => {
-            setUiValue(value);
-            debouncedSetter(value);
-        }, [debouncedSetter]);
-
+        onChangeFunction = onChangeForOnChange;
         onChangeCommittedFunction = null;
-
     } else if (setter_timing === "on_change_committed") {
-        onChangeFunction = useCallback((value) => {
-            setUiValue(value);
-        }, []);
-
-        onChangeCommittedFunction = useCallback((value) => {
-            setterFunction(value);
-        }, [setterFunction]);
+        onChangeFunction = onChangeForCommitted;
+        onChangeCommittedFunction = onChangeCommittedForCommitted;
     } else {
         console.error(`Invalid 'setter_timing' value provided to useSliderLogic. Expected 'on_change' or 'on_change_committed'. Received: ${setter_timing}`);
     }
@@ -336,7 +364,10 @@ export const useSaveButtonLogic = ({
 
     const saveFunction = () => {
         if (input_value === "" || input_value === null) {
-            return deleteFunction();
+            if (typeof deleteFunction === "function") {
+                return deleteFunction();
+            }
+            return setFunction(input_value ?? "");
         }
         setFunction(input_value);
     };
@@ -345,7 +376,7 @@ export const useSaveButtonLogic = ({
         if (state === "pending") return;
         setInputValue(variable);
 
-    }, [variable]);
+    }, [variable, state]);
 
     return {
         variable: input_value,

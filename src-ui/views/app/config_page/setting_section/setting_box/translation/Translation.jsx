@@ -6,6 +6,8 @@ import {
     useSaveButtonLogic,
 } from "@logics_configs";
 
+import styles from "./Translation.module.scss";
+
 import {
     DownloadModelsContainer,
     AuthKeyContainer,
@@ -13,6 +15,10 @@ import {
     DropdownMenuContainer,
     ConnectionCheckButtonContainer,
 } from "../_templates/Templates";
+
+import {
+    SectionLabelComponent,
+} from "../_components";
 
 import { ComputeDevice } from "../_components/compute_device/ComputeDevice";
 
@@ -29,9 +35,30 @@ import { useLLMConnection } from "@logics_common";
 
 export const Translation = () => {
     return (
-        <>
+        <div className={styles.container}>
+            <AITranslation_Container />
+            <ExternalTranslationAPI_Container />
+            <LocalLLM_Container />
+        </div>
+    );
+};
+
+const AITranslation_Container = () => {
+    const { t } = useI18n();
+    return (
+        <div>
+            <SectionLabelComponent label={t("config_page.translation.section_label_ai_translation")} />
             <CTranslate2WeightType_Box />
             <TranslationComputeDevice_Box />
+        </div>
+    );
+};
+
+const ExternalTranslationAPI_Container = () => {
+    const { t } = useI18n();
+    return (
+        <div>
+            <SectionLabelComponent label={t("config_page.translation.section_label_external_api")} />
 
             <DeepLAuthKey_Box />
 
@@ -49,6 +76,15 @@ export const Translation = () => {
 
             <OpenRouterAuthKey_Box />
             <OpenRouterModelContainer />
+        </div>
+    );
+};
+
+const LocalLLM_Container = () => {
+    const { t } = useI18n();
+    return (
+        <div>
+            <SectionLabelComponent label={t("config_page.translation.section_label_local_llm")} />
 
             <LMStudioConnectionCheck_Box />
             <LMStudioURL_Box />
@@ -56,7 +92,11 @@ export const Translation = () => {
 
             <OllamaConnectionCheck_Box />
             <OllamaModelContainer />
-        </>
+
+            <OpenAICompatibleURL_Box />
+            <OpenAICompatibleAuthKey_Box />
+            <OpenAICompatibleModelContainer />
+        </div>
     );
 };
 
@@ -84,7 +124,7 @@ const CTranslate2WeightType_Box = () => {
     const c_translate2_weight_types_object = currentCTranslate2WeightTypeStatus.data.map(item => {
         return {
             ...item,
-            label: `${item.id} (${item.capacity})`,
+            label: item.id,
         };
     });
 
@@ -153,7 +193,6 @@ const DeepLAuthKey_Box = () => {
                     {translator: t("main_page.translator")}
                 )}
                 webpage_url={deepl_auth_key_url}
-                open_webpage_label={t("config_page.common.open_auth_key_webpage")}
                 variable={variable}
                 state={currentDeepLAuthKey.state}
                 onChangeFunction={onChangeFunction}
@@ -180,7 +219,6 @@ const PlamoAuthKey_Box = () => {
                 label={t("config_page.translation.plamo_auth_key.label")}
                 // desc="Plamo Auth Desc"
                 webpage_url={plamo_auth_key_url}
-                open_webpage_label={t("config_page.common.open_auth_key_webpage")}
                 variable={variable}
                 state={currentPlamoAuthKey.state}
                 onChangeFunction={onChangeFunction}
@@ -242,7 +280,6 @@ const GeminiAuthKey_Box = () => {
                 label={t("config_page.translation.gemini_auth_key.label")}
                 // desc="Gemini Auth Desc"
                 webpage_url={gemini_auth_key_url}
-                open_webpage_label={t("config_page.common.open_auth_key_webpage")}
                 variable={variable}
                 state={currentGeminiAuthKey.state}
                 onChangeFunction={onChangeFunction}
@@ -303,7 +340,6 @@ const OpenAIAuthKey_Box = () => {
                 label={t("config_page.translation.openai_auth_key.label")}
                 // desc="OpenAI Auth Desc"
                 webpage_url={openai_auth_key_url}
-                open_webpage_label={t("config_page.common.open_auth_key_webpage")}
                 variable={variable}
                 state={currentOpenAIAuthKey.state}
                 onChangeFunction={onChangeFunction}
@@ -364,7 +400,6 @@ const GroqAuthKey_Box = () => {
                 label={t("config_page.translation.groq_auth_key.label")}
                 // desc="Groq Auth Desc"
                 webpage_url={groq_auth_key_url}
-                open_webpage_label={t("config_page.common.open_auth_key_webpage")}
                 variable={variable}
                 state={currentGroqAuthKey.state}
                 onChangeFunction={onChangeFunction}
@@ -425,7 +460,6 @@ const OpenRouterAuthKey_Box = () => {
                 label={t("config_page.translation.openrouter_auth_key.label")}
                 // desc="OpenRouter Auth Desc"
                 webpage_url={openrouter_auth_key_url}
-                open_webpage_label={t("config_page.common.open_auth_key_webpage")}
                 variable={variable}
                 state={currentOpenRouterAuthKey.state}
                 onChangeFunction={onChangeFunction}
@@ -593,3 +627,86 @@ const OllamaModelContainer = () => {
     );
 };
 
+const OpenAICompatibleURL_Box = () => {
+    const { t } = useI18n();
+    const { currentOpenAICompatibleURL, setOpenAICompatibleURL } = useTranslation();
+
+    const { variable, onChangeFunction, saveFunction } = useSaveButtonLogic({
+        variable: currentOpenAICompatibleURL.data,
+        state: currentOpenAICompatibleURL.state,
+        setFunction: setOpenAICompatibleURL,
+    });
+
+    return (
+        <>
+            <EntryWithSaveButtonContainer
+                label={t("config_page.translation.openai_compatible_url.label")}
+                desc={t("config_page.translation.openai_compatible_url.desc")}
+                variable={variable}
+                saveFunction={saveFunction}
+                onChangeFunction={onChangeFunction}
+                state={currentOpenAICompatibleURL.state}
+                remove_border_bottom={true}
+            />
+        </>
+    );
+};
+const OpenAICompatibleAuthKey_Box = () => {
+    const { t } = useI18n();
+    const {
+        currentOpenAICompatibleAuthKey,
+        setOpenAICompatibleAuthKey,
+        deleteOpenAICompatibleAuthKey,
+    } = useTranslation();
+
+    const { variable, onChangeFunction, saveFunction } = useSaveButtonLogic({
+        variable: currentOpenAICompatibleAuthKey.data,
+        state: currentOpenAICompatibleAuthKey.state,
+        setFunction: setOpenAICompatibleAuthKey,
+        deleteFunction: deleteOpenAICompatibleAuthKey,
+    });
+
+    return (
+        <>
+            <AuthKeyContainer
+                label={t("config_page.translation.openai_compatible_auth_key.label")}
+                variable={variable}
+                state={currentOpenAICompatibleAuthKey.state}
+                onChangeFunction={onChangeFunction}
+                saveFunction={saveFunction}
+                remove_border_bottom={true}
+            />
+        </>
+    );
+};
+const OpenAICompatibleModelContainer = () => {
+    const { t } = useI18n();
+    const {
+        currentSelectableOpenAICompatibleModelList,
+
+        currentSelectedOpenAICompatibleModel,
+        setSelectedOpenAICompatibleModel,
+
+        currentOpenAICompatibleAuthKey,
+    } = useTranslation();
+
+    const selectFunction = (selected_data) => {
+        setSelectedOpenAICompatibleModel(selected_data.selected_id);
+    };
+
+    const selected_label = (!currentOpenAICompatibleAuthKey.data && !currentSelectedOpenAICompatibleModel.data)
+        ? t("config_page.common.correct_auth_key_required")
+        : currentSelectedOpenAICompatibleModel.data;
+
+    return (
+        <DropdownMenuContainer
+            dropdown_id="select_openai_compatible_model"
+            label={t("config_page.translation.select_openai_compatible_model.label")}
+            selected_id={selected_label}
+            list={currentSelectableOpenAICompatibleModelList.data}
+            selectFunction={selectFunction}
+            state={currentSelectedOpenAICompatibleModel.state}
+            is_disabled={!currentOpenAICompatibleAuthKey.data}
+        />
+    );
+};

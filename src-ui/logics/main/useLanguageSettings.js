@@ -1,9 +1,12 @@
-import { useStore_SelectedPresetTabNumber, useStore_SelectedYourLanguages, useStore_SelectedTargetLanguages, useStore_TranslationEngines, useStore_SelectedTranslationEngines, useStore_SelectableLanguageList } from "@store";
+import { useStore_LanguageMutation, useStore_SelectedPresetTabNumber, useStore_SelectedYourLanguages, useStore_SelectedTargetLanguages, useStore_TranslationEngines, useStore_SelectedTranslationEngines, useStore_SelectableLanguageList } from "@store";
 import { useStdoutToPython } from "@useStdoutToPython";
+import { canChangeLanguageSettings, createLanguageRequestId } from "./languageMutations";
+import { store } from "@store";
 import { translator_status } from "@ui_configs";
 
 export const useLanguageSettings = () => {
     const { asyncStdoutToPython } = useStdoutToPython();
+    const { currentLanguageMutation } = useStore_LanguageMutation();
 
     const {
         currentSelectedYourLanguages,
@@ -37,25 +40,37 @@ export const useLanguageSettings = () => {
     } = useStore_SelectableLanguageList();
 
 
+    const sendMutation = (endpoint, value) => {
+        const requestId = createLanguageRequestId();
+        const request = { requestId, source: store.is_vr_panel ? "vr" : "pc", expectedSnapshot: {
+            tab: currentSelectedPresetTabNumber.data, your: currentSelectedYourLanguages.data,
+            target: currentSelectedTargetLanguages.data, selectedEngines: currentSelectedTranslationEngines.data,
+        } };
+        // The main transport owns pending and completion. A /run notification
+        // alone does not finish the operation.
+        asyncStdoutToPython(endpoint, value, request).catch(console.error);
+        return requestId;
+    };
+
     const getSelectedPresetTabNumber = () => {
         pendingSelectedPresetTabNumber();
         asyncStdoutToPython("/get/data/selected_tab_no");
     };
 
     const setSelectedPresetTabNumber = (preset_number) => {
-        pendingSelectedPresetTabNumber();
 
-        asyncStdoutToPython("/set/data/selected_tab_no", preset_number);
+
+        return sendMutation("/set/data/selected_tab_no", preset_number);
     };
 
 
     const getSelectedYourLanguages = () => {
-        pendingSelectedPresetTabNumber();
+        pendingSelectedYourLanguages();
         asyncStdoutToPython("/get/data/selected_your_languages");
     };
 
     const setSelectedYourLanguages = (selected_language_data) => {
-        pendingSelectedYourLanguages();
+
         const send_obj = {
             ...currentSelectedYourLanguages.data,
             [currentSelectedPresetTabNumber.data]: {
@@ -66,7 +81,7 @@ export const useLanguageSettings = () => {
                 }
             }
         };
-        asyncStdoutToPython("/set/data/selected_your_languages", send_obj);
+        return sendMutation("/set/data/selected_your_languages", send_obj);
     };
 
 
@@ -76,32 +91,74 @@ export const useLanguageSettings = () => {
     };
 
     const setSelectedTargetLanguages = (selected_language_data) => {
-        pendingSelectedTargetLanguages();
-        let send_obj = currentSelectedTargetLanguages.data;
-        send_obj[currentSelectedPresetTabNumber.data][selected_language_data.target_key].language = selected_language_data.language,
-        send_obj[currentSelectedPresetTabNumber.data][selected_language_data.target_key].country = selected_language_data.country,
-        asyncStdoutToPython("/set/data/selected_target_languages", send_obj);
+
+        const tab_no = currentSelectedPresetTabNumber.data;
+        const target_key = selected_language_data.target_key;
+        const send_obj = {
+            ...currentSelectedTargetLanguages.data,
+            [tab_no]: {
+                ...currentSelectedTargetLanguages.data[tab_no],
+                [target_key]: {
+                    ...currentSelectedTargetLanguages.data[tab_no][target_key],
+                    language: selected_language_data.language,
+                    country: selected_language_data.country,
+                },
+            },
+        };
+        return sendMutation("/set/data/selected_target_languages", send_obj);
+    };
+
+    // 今のプリセットの相手の言語を、languages ([{language, country}], 1〜3件) の順に枠1から詰めて設定する。
+    // 余った枠は無効にする (言語はそのまま残す)。VR UIで候補を選ぶ・外すときに使う
+    const setTargetLanguagesInOrder = (languages) => {
+        if (languages.length < 1 || languages.length > 3) return;
+
+        const tab_no = currentSelectedPresetTabNumber.data;
+        const current = currentSelectedTargetLanguages.data[tab_no];
+        const updated = {};
+        for (const target_key of ["1", "2", "3"]) {
+            const language = languages[Number(target_key) - 1];
+            updated[target_key] = language
+                ? { language: language.language, country: language.country, enable: true }
+                : { ...current[target_key], enable: false };
+        }
+        return sendMutation("/set/data/selected_target_languages", {
+            ...currentSelectedTargetLanguages.data,
+            [tab_no]: updated,
+        });
     };
 
     const addTargetLanguage = () => {
-        pendingSelectedTargetLanguages();
-        let send_obj = currentSelectedTargetLanguages.data;
-        let target_key = "2";
-        if (send_obj[currentSelectedPresetTabNumber.data]["2"].enable === true) {
-            target_key = "3";
-        }
-        send_obj[currentSelectedPresetTabNumber.data][target_key].enable = true,
-        asyncStdoutToPython("/set/data/selected_target_languages", send_obj);
+
+        const tab_no = currentSelectedPresetTabNumber.data;
+        const target_key = currentSelectedTargetLanguages.data[tab_no]["2"].enable === true ? "3" : "2";
+        const send_obj = {
+            ...currentSelectedTargetLanguages.data,
+            [tab_no]: {
+                ...currentSelectedTargetLanguages.data[tab_no],
+                [target_key]: {
+                    ...currentSelectedTargetLanguages.data[tab_no][target_key],
+                    enable: true,
+                },
+            },
+        };
+        return sendMutation("/set/data/selected_target_languages", send_obj);
     };
     const removeTargetLanguage = () => {
-        pendingSelectedTargetLanguages();
-        let send_obj = currentSelectedTargetLanguages.data;
-        let target_key = "3";
-        if (send_obj[currentSelectedPresetTabNumber.data]["3"].enable === false) {
-            target_key = "2";
-        }
-        send_obj[currentSelectedPresetTabNumber.data][target_key].enable = false,
-        asyncStdoutToPython("/set/data/selected_target_languages", send_obj);
+
+        const tab_no = currentSelectedPresetTabNumber.data;
+        const target_key = currentSelectedTargetLanguages.data[tab_no]["3"].enable === false ? "2" : "3";
+        const send_obj = {
+            ...currentSelectedTargetLanguages.data,
+            [tab_no]: {
+                ...currentSelectedTargetLanguages.data[tab_no],
+                [target_key]: {
+                    ...currentSelectedTargetLanguages.data[tab_no][target_key],
+                    enable: false,
+                },
+            },
+        };
+        return sendMutation("/set/data/selected_target_languages", send_obj);
     };
 
 
@@ -126,16 +183,18 @@ export const useLanguageSettings = () => {
     };
 
     const setSelectedTranslationEngines = (selected_translator) => {
-        pendingSelectedTranslationEngines();
-        let send_obj = currentSelectedTranslationEngines.data;
-        send_obj[currentSelectedPresetTabNumber.data] = selected_translator;
-        asyncStdoutToPython("/set/data/selected_translation_engines", send_obj);
+
+        const send_obj = {
+            ...currentSelectedTranslationEngines.data,
+            [currentSelectedPresetTabNumber.data]: selected_translator,
+        };
+        return sendMutation("/set/data/selected_translation_engines", send_obj);
     };
 
     const swapSelectedLanguages = () => {
-        pendingSelectedYourLanguages();
-        pendingSelectedTargetLanguages();
-        asyncStdoutToPython("/run/swap_your_language_and_target_language");
+
+
+        return sendMutation("/run/swap_your_language_and_target_language");
     };
 
     const updateBothSelectedLanguages = (payload) => {
@@ -150,6 +209,18 @@ export const useLanguageSettings = () => {
 
 
     return {
+        currentLanguageMutation,
+        canChangeLanguageSettings,
+        refreshLanguageSettings: () => {
+            getSelectedPresetTabNumber();
+            getSelectedYourLanguages();
+            getSelectedTargetLanguages();
+            getSelectedTranslationEngines();
+            getTranslationEngines();
+        },
+        isLanguageSettingsBusy: Boolean(currentLanguageMutation.data.inFlight)
+            || currentLanguageMutation.data.isResyncing
+            || [currentSelectedPresetTabNumber, currentSelectedYourLanguages, currentSelectedTargetLanguages, currentSelectedTranslationEngines, currentTranslationEngines].some(value => value.state !== "ok"),
         currentSelectedPresetTabNumber,
         getSelectedPresetTabNumber,
         updateSelectedPresetTabNumber,
@@ -167,6 +238,7 @@ export const useLanguageSettings = () => {
 
         addTargetLanguage,
         removeTargetLanguage,
+        setTargetLanguagesInOrder,
 
         currentTranslationEngines,
         getTranslationEngines,

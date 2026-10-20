@@ -1,70 +1,152 @@
 from os import path as os_path
 from deepl import DeepLClient
-try:
-    from translators import translate_text as other_web_Translator
-    ENABLE_TRANSLATORS = True
-except Exception:
-    other_web_Translator = None  # type: ignore
-    ENABLE_TRANSLATORS = False
 
 try:
     from .translation_languages import translation_lang
     from .translation_utils import ctranslate2_weights
-    from .translation_plamo import PlamoClient
-    from .translation_gemini import GeminiClient
-    from .translation_openai import OpenAIClient
-    from .translation_lmstudio import LMStudioClient
-    from .translation_ollama import OllamaClient
-    from .translation_groq import GroqClient
-    from .translation_openrouter import OpenRouterClient
+    from .translation_providers import TRANSLATION_PROVIDER_REGISTRY
 except Exception:
     import sys
     sys.path.append(os_path.dirname(os_path.dirname(os_path.dirname(os_path.abspath(__file__)))))
     from translation_languages import translation_lang
     from translation_utils import ctranslate2_weights
-    from translation_plamo import PlamoClient
-    from translation_gemini import GeminiClient
-    from translation_openai import OpenAIClient
-    from translation_lmstudio import LMStudioClient
-    from translation_ollama import OllamaClient
-    from translation_groq import GroqClient
-    from translation_openrouter import OpenRouterClient
+    from translation_providers import TRANSLATION_PROVIDER_REGISTRY
 
-import ctranslate2
-import transformers
 from utils import errorLogging, getBestComputeType
 
+try:
+    # GPL の translators から、MIT 互換の自前実装に置き換えた
+    # (translator_engines)。Bing の認証情報パースはそちらに内蔵済み。
+    # Rust 製のビルド済み拡張 (src-python/translator_engines.pyd) を同梱している。
+    # ライセンスにより VRCT 以外への流用は不可 (translator_engines.LICENSE.txt)。
+    # translators と違い import 時に通信しないので、オフライン起動でも
+    # ENABLE_TRANSLATORS が False に落ちない。
+    from translator_engines import translate_text as other_web_Translator
+    ENABLE_TRANSLATORS = True
+except Exception:
+    other_web_Translator = None  # type: ignore
+    ENABLE_TRANSLATORS = False
+
+# Google/Bing/Papago の HTTP タイムアウト。応答が返らないと呼び出し元の
+# スレッドが止まる。VRCT のパイプラインは単一スレッドなので、翻訳のハングは
+# 文字起こしごと停止させ、最終的に watchdog が発火する。
+# NOTE: これは 1 リクエストあたりの値。Bing は認証ページの取得と翻訳、
+# さらにトークン失効時の 1 回のリトライで最大 4 リクエストを発行しうる。
+_WEB_TRANSLATOR_TIMEOUT_SECONDS = 10
+
 import warnings
-from typing import Any, Optional, Tuple
+from threading import RLock
+from typing import Any, Dict, Optional, Tuple
 
 warnings.filterwarnings("ignore")
+
+
+class UnsupportedLanguageError(Exception):
+    """Raised when a language is not supported by the selected translator.
+
+    Distinct from a translator backend failure (rate limit, network,
+    authentication, provider error) so callers do not disable the
+    translation engine just because the user picked a language it
+    doesn't cover.
+    """
+    pass
+
+try:
+    import ctranslate2  # noqa: F401
+except Exception:
+    ctranslate2 = None  # type: ignore
+
+try:
+    import transformers  # noqa: F401
+except Exception:
+    transformers = None  # type: ignore
+
+# 各プロバイダの LLM クライアント SDK は起動時にまとめて import する。
+# try/except は Python パッケージ vs スクリプト実行の両方で動かすため
+# (`from .module` と `from module` の両パターン)。PyInstaller の import
+# scanner が静的に検出できるよう `from ... import Class` の形を維持する。
+try:
+    from .translation_plamo import PlamoClient
+except Exception:
+    from translation_plamo import PlamoClient
+
+try:
+    from .translation_gemini import GeminiClient
+except Exception:
+    from translation_gemini import GeminiClient
+
+try:
+    from .translation_openai import OpenAIClient
+except Exception:
+    from translation_openai import OpenAIClient
+
+try:
+    from .translation_openai_compatible import OpenAICompatibleClient
+except Exception:
+    from translation_openai_compatible import OpenAICompatibleClient
+
+try:
+    from .translation_groq import GroqClient
+except Exception:
+    from translation_groq import GroqClient
+
+try:
+    from .translation_openrouter import OpenRouterClient
+except Exception:
+    from translation_openrouter import OpenRouterClient
+
+try:
+    from .translation_lmstudio import LMStudioClient
+except Exception:
+    from translation_lmstudio import LMStudioClient
+
+try:
+    from .translation_ollama import OllamaClient
+except Exception:
+    from translation_ollama import OllamaClient
 
 
 class Translator:
     """High-level translator facade.
 
-    This class wraps multiple backends (DeepL, DeepL API, Google, Bing, Papago,
+    This class wraps multiple backends (DeepL API, Google, Bing, Papago,
     and CTranslate2 local models). Optional dependencies may be unavailable at
     runtime; methods degrade gracefully and return False or an empty string on
     failure (kept compatible with existing behavior).
     """
 
     def __init__(self) -> None:
+        self.is_enable_translators = ENABLE_TRANSLATORS
         self.deepl_client: Optional[DeepLClient] = None
-        self.plamo_client: Optional[PlamoClient] = None
-        self.gemini_client: Optional[GeminiClient] = None
-        self.openai_client: Optional[OpenAIClient] = None
-        self.groq_client: Optional[GroqClient] = None
-        self.openrouter_client: Optional[OpenRouterClient] = None
-        self.lmstudio_client: LMStudioClient[LMStudioClient] = None
+        # TRANSLATION_PROVIDER_REGISTRY に登録されたエンジン
+        # (Plamo/Gemini/OpenAI/Groq/OpenRouter、フェーズ3項目17) の
+        # クライアントは、ここに一元管理する。エンジンごとの専用フィールド
+        # (self.plamo_client 等、旧実装) の代わりに、レジストリの
+        # engine_key をキーとした辞書で持つことで、認証/モデル一覧取得/
+        # モデル変更/クライアント更新の4メソッドをエンジンの数だけ書かずに
+        # 済む (authenticationRegistryAuthKey 等、下記参照)。
+        self._provider_clients: Dict[str, Any] = {}
+        self.openai_compatible_client: Optional[Any] = None
+        self.lmstudio_client: Optional[Any] = None
         self.lmstudio_connected: bool = False
-        self.ollama_client: OllamaClient[OllamaClient] = None
+        self.ollama_client: Optional[Any] = None
         self.ollama_connected: bool = False
         self.ctranslate2_translator: Any = None
         self.ctranslate2_tokenizer: Any = None
         self.is_loaded_ctranslate2_model: bool = False
         self.is_changed_translator_parameters: bool = False
-        self.is_enable_translators: bool = ENABLE_TRANSLATORS
+        # ctranslate2_translator/ctranslate2_tokenizer は mic/speaker の
+        # _print_transcript スレッドと mainloop ワーカー (チャット送信) から
+        # 同時に触られる共有状態。tokenizer.src_lang への代入は tokenizer
+        # インスタンス自体の状態を書き換えるため、無ロックだと mic/speaker
+        # 間で src_lang が競合して意図しない言語で encode/decode されたり
+        # (クラッシュせず気付きにくい翻訳品質の劣化)、changeCTranslate2Model()
+        # によるモデル差し替え中の破棄途中オブジェクトに translate_batch が
+        # 入りうる。CTranslate2 の Translator 自体はスレッドセーフだが、
+        # これは tokenizer の保護にはならない。RLock なのは、将来
+        # 呼び出し元が既にロックを保持した状態で再入する可能性に備えるため
+        # (現状のコードパスでは再入は起きない)。
+        self._ctranslate2_lock: RLock = RLock()
 
     def authenticationDeepLAuthKey(self, auth_key: str) -> bool:
         """Authenticate DeepL API with the provided key.
@@ -82,73 +164,98 @@ class Translator:
             result = False
         return result
 
+    def authenticationRegistryAuthKey(self, engine_key: str, auth_key: str, root_path: str = None, **client_kwargs) -> bool:
+        """`TRANSLATION_PROVIDER_REGISTRY` 登録エンジン共通の認証処理。
+
+        `client_kwargs` は OpenAI_API の `base_url` のように、一部エンジンの
+        クライアントコンストラクタだけが受け取る追加引数を通すためのもの
+        (Plamo/Gemini/Groq/OpenRouter は指定不要)。
+
+        Returns True on success, False on failure.
+        """
+        client = TRANSLATION_PROVIDER_REGISTRY[engine_key].client_class(root_path=root_path, **client_kwargs)
+        if client.setAuthKey(auth_key):
+            self._provider_clients[engine_key] = client
+            return True
+        else:
+            self._provider_clients.pop(engine_key, None)
+            return False
+
+    def getRegistryModelList(self, engine_key: str) -> list[str]:
+        """`TRANSLATION_PROVIDER_REGISTRY` 登録エンジン共通のモデル一覧取得。
+
+        Returns a list of model names, or an empty list on failure.
+        """
+        client = self._provider_clients.get(engine_key)
+        if client is None:
+            return []
+        return client.getModelList()
+
+    def setRegistryModel(self, engine_key: str, model: str) -> bool:
+        """`TRANSLATION_PROVIDER_REGISTRY` 登録エンジン共通のモデル変更。
+
+        Returns True on success, False on failure.
+        """
+        client = self._provider_clients.get(engine_key)
+        if client is None:
+            return False
+        return client.setModel(model)
+
+    def updateRegistryClient(self, engine_key: str) -> None:
+        """`TRANSLATION_PROVIDER_REGISTRY` 登録エンジン共通のクライアント更新。"""
+        client = self._provider_clients.get(engine_key)
+        if client is not None:
+            client.updateClient()
+
     def authenticationPlamoAuthKey(self, auth_key: str, root_path: str = None) -> bool:
         """Authenticate Plamo API with the provided key.
 
         Returns True on success, False on failure.
         """
-        self.plamo_client = PlamoClient(root_path=root_path)
-        if self.plamo_client.setAuthKey(auth_key):
-            return True
-        else:
-            self.plamo_client = None
-            return False
+        return self.authenticationRegistryAuthKey("Plamo_API", auth_key, root_path=root_path)
 
     def getPlamoModelList(self) -> list[str]:
         """Get available Plamo models.
 
         Returns a list of model names, or an empty list on failure.
         """
-        if self.plamo_client is None:
-            return []
-        return self.plamo_client.getModelList()
+        return self.getRegistryModelList("Plamo_API")
 
     def setPlamoModel(self, model: str) -> bool:
         """Change the Plamo model used for translation.
 
         Returns True on success, False on failure.
         """
-        if self.plamo_client is None:
-            return False
-        return self.plamo_client.setModel(model)
+        return self.setRegistryModel("Plamo_API", model)
 
     def updatePlamoClient(self) -> None:
         """Update the Plamo client (fetch available models)."""
-        self.plamo_client.updateClient()
+        self.updateRegistryClient("Plamo_API")
 
     def authenticationGeminiAuthKey(self, auth_key: str, root_path: str = None) -> bool:
         """Authenticate Gemini API with the provided key.
 
         Returns True on success, False on failure.
         """
-        self.gemini_client = GeminiClient(root_path=root_path)
-        if self.gemini_client.setAuthKey(auth_key):
-            return True
-        else:
-            self.gemini_client = None
-            return False
+        return self.authenticationRegistryAuthKey("Gemini_API", auth_key, root_path=root_path)
 
     def getGeminiModelList(self) -> list[str]:
         """Get available Gemini models.
 
         Returns a list of model names, or an empty list on failure.
         """
-        if self.gemini_client is None:
-            return []
-        return self.gemini_client.getModelList()
+        return self.getRegistryModelList("Gemini_API")
 
     def setGeminiModel(self, model: str) -> bool:
         """Change the Gemini model used for translation.
 
         Returns True on success, False on failure.
         """
-        if self.gemini_client is None:
-            return False
-        return self.gemini_client.setModel(model)
+        return self.setRegistryModel("Gemini_API", model)
 
     def updateGeminiClient(self) -> None:
         """Update the Gemini client (fetch available models)."""
-        self.gemini_client.updateClient()
+        self.updateRegistryClient("Gemini_API")
 
     def authenticationOpenAIAuthKey(self, auth_key: str, base_url: str | None = None, root_path: str = None) -> bool:
         """Authenticate OpenAI (Chat Completions) API with the provided key.
@@ -156,102 +263,104 @@ class Translator:
         base_url を指定することで互換エンドポイント (例: Azure OpenAI 互換, Proxy) にも対応可能。
         Returns True on success, False on failure.
         """
-        self.openai_client = OpenAIClient(base_url=base_url, root_path=root_path)
-        if self.openai_client.setAuthKey(auth_key):
-            return True
-        else:
-            self.openai_client = None
-            return False
+        return self.authenticationRegistryAuthKey("OpenAI_API", auth_key, root_path=root_path, base_url=base_url)
 
     def getOpenAIModelList(self) -> list[str]:
         """Get available OpenAI models.
 
         Returns a list of model names, or an empty list on failure.
         """
-        if self.openai_client is None:
-            return []
-        return self.openai_client.getModelList()
+        return self.getRegistryModelList("OpenAI_API")
 
     def setOpenAIModel(self, model: str) -> bool:
         """Change the OpenAI model used for translation.
 
         Returns True on success, False on failure.
         """
-        if self.openai_client is None:
-            return False
-        return self.openai_client.setModel(model)
+        return self.setRegistryModel("OpenAI_API", model)
 
     def updateOpenAIClient(self) -> None:
         """Update the OpenAI client (fetch available models)."""
-        self.openai_client.updateClient()
+        self.updateRegistryClient("OpenAI_API")
+
+    def authenticationOpenAICompatibleAuthKey(self, auth_key: str, base_url: str | None = None, root_path: str = None) -> bool:
+        """Authenticate an OpenAI-compatible endpoint with the provided key and base URL.
+
+        `base_url` は必須想定（None の場合は公式エンドポイントにフォールバック）。
+        Returns True on success, False on failure.
+        """
+        self.openai_compatible_client = OpenAICompatibleClient(base_url=base_url, root_path=root_path)
+        if self.openai_compatible_client.setAuthKey(auth_key):
+            return True
+        else:
+            self.openai_compatible_client = None
+            return False
+
+    def getOpenAICompatibleModelList(self) -> list[str]:
+        """Get available OpenAI-compatible endpoint models."""
+        if self.openai_compatible_client is None:
+            return []
+        return self.openai_compatible_client.getModelList()
+
+    def setOpenAICompatibleModel(self, model: str) -> bool:
+        """Change the OpenAI-compatible model used for translation."""
+        if self.openai_compatible_client is None:
+            return False
+        return self.openai_compatible_client.setModel(model)
+
+    def updateOpenAICompatibleClient(self) -> None:
+        """Update the OpenAI-compatible client (fetch available models)."""
+        self.openai_compatible_client.updateClient()
 
     def authenticationGroqAuthKey(self, auth_key: str, root_path: str = None) -> bool:
         """Authenticate Groq API with the provided key.
 
         Returns True on success, False on failure.
         """
-        self.groq_client = GroqClient(root_path=root_path)
-        if self.groq_client.setAuthKey(auth_key):
-            return True
-        else:
-            self.groq_client = None
-            return False
+        return self.authenticationRegistryAuthKey("Groq_API", auth_key, root_path=root_path)
 
     def getGroqModelList(self) -> list[str]:
         """Get available Groq models.
 
         Returns a list of model names, or an empty list on failure.
         """
-        if self.groq_client is None:
-            return []
-        return self.groq_client.getModelList()
+        return self.getRegistryModelList("Groq_API")
 
     def setGroqModel(self, model: str) -> bool:
         """Change the Groq model used for translation.
 
         Returns True on success, False on failure.
         """
-        if self.groq_client is None:
-            return False
-        return self.groq_client.setModel(model)
+        return self.setRegistryModel("Groq_API", model)
 
     def updateGroqClient(self) -> None:
         """Update the Groq client (fetch available models)."""
-        self.groq_client.updateClient()
+        self.updateRegistryClient("Groq_API")
 
     def authenticationOpenRouterAuthKey(self, auth_key: str, root_path: str = None) -> bool:
         """Authenticate OpenRouter API with the provided key.
 
         Returns True on success, False on failure.
         """
-        self.openrouter_client = OpenRouterClient(root_path=root_path)
-        if self.openrouter_client.setAuthKey(auth_key):
-            return True
-        else:
-            self.openrouter_client = None
-            return False
+        return self.authenticationRegistryAuthKey("OpenRouter_API", auth_key, root_path=root_path)
 
     def getOpenRouterModelList(self) -> list[str]:
         """Get available OpenRouter models.
 
         Returns a list of model names, or an empty list on failure.
         """
-        if self.openrouter_client is None:
-            return []
-        return self.openrouter_client.getModelList()
+        return self.getRegistryModelList("OpenRouter_API")
 
     def setOpenRouterModel(self, model: str) -> bool:
         """Change the OpenRouter model used for translation.
 
         Returns True on success, False on failure.
         """
-        if self.openrouter_client is None:
-            return False
-        return self.openrouter_client.setModel(model)
+        return self.setRegistryModel("OpenRouter_API", model)
 
     def updateOpenRouterClient(self) -> None:
         """Update the OpenRouter client (fetch available models)."""
-        self.openrouter_client.updateClient()
+        self.updateRegistryClient("OpenRouter_API")
 
     def getLMStudioConnected(self) -> bool:
         """Get LM Studio connection status.
@@ -343,29 +452,33 @@ class Translator:
         This sets internal translator/tokenizer objects and flips
         ``is_loaded_ctranslate2_model`` on success.
         """
-        self.is_loaded_ctranslate2_model = False
-        directory_name = ctranslate2_weights[model_type]["directory_name"]
-        tokenizer = ctranslate2_weights[model_type]["tokenizer"]
-        weight_path = os_path.join(path, "weights", "ctranslate2", directory_name)
-        tokenizer_path = os_path.join(path, "weights", "ctranslate2", directory_name, "tokenizer")
+        if ctranslate2 is None or transformers is None:
+            return
 
-        if compute_type == "auto":
-            compute_type = getBestComputeType(device, device_index)
-        self.ctranslate2_translator = ctranslate2.Translator(
-            weight_path,
-            device=device,
-            device_index=device_index,
-            compute_type=compute_type,
-            inter_threads=1,
-            intra_threads=4,
-        )
-        try:
-            self.ctranslate2_tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer, cache_dir=tokenizer_path)
-        except Exception:
-            errorLogging()
-            tokenizer_path = os_path.join("./weights", "ctranslate2", directory_name, "tokenizer")
-            self.ctranslate2_tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer, cache_dir=tokenizer_path)
-        self.is_loaded_ctranslate2_model = True
+        with self._ctranslate2_lock:
+            self.is_loaded_ctranslate2_model = False
+            directory_name = ctranslate2_weights[model_type]["directory_name"]
+            tokenizer = ctranslate2_weights[model_type]["tokenizer"]
+            weight_path = os_path.join(path, "weights", "ctranslate2", directory_name)
+            tokenizer_path = os_path.join(path, "weights", "ctranslate2", directory_name, "tokenizer")
+
+            if compute_type == "auto":
+                compute_type = getBestComputeType(device, device_index)
+            self.ctranslate2_translator = ctranslate2.Translator(
+                weight_path,
+                device=device,
+                device_index=device_index,
+                compute_type=compute_type,
+                inter_threads=1,
+                intra_threads=4,
+            )
+            try:
+                self.ctranslate2_tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer, cache_dir=tokenizer_path)
+            except Exception:
+                errorLogging()
+                tokenizer_path = os_path.join("./weights", "ctranslate2", directory_name, "tokenizer")
+                self.ctranslate2_tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer, cache_dir=tokenizer_path)
+            self.is_loaded_ctranslate2_model = True
 
     def isLoadedCTranslate2Model(self) -> bool:
         return self.is_loaded_ctranslate2_model
@@ -382,22 +495,23 @@ class Translator:
         Returns a string on success or False on failure (keeps legacy behavior).
         """
         result: Any = False
-        if self.is_loaded_ctranslate2_model is True:
-            try:
-                self.ctranslate2_tokenizer.src_lang = source_language
-                source = self.ctranslate2_tokenizer.convert_ids_to_tokens(self.ctranslate2_tokenizer.encode(message))
-                match weight_type:
-                    case "m2m100_418M-ct2-int8" | "m2m100_1.2B-ct2-int8":
-                        target_prefix = [self.ctranslate2_tokenizer.lang_code_to_token[target_language]]
-                    case "nllb-200-distilled-1.3B-ct2-int8" | "nllb-200-3.3B-ct2-int8":
-                        target_prefix = [target_language]
-                    case _:
-                        return False
-                results = self.ctranslate2_translator.translate_batch([source], target_prefix=[target_prefix])
-                target = results[0].hypotheses[0][1:]
-                result = self.ctranslate2_tokenizer.decode(self.ctranslate2_tokenizer.convert_tokens_to_ids(target))
-            except Exception:
-                errorLogging()
+        with self._ctranslate2_lock:
+            if self.is_loaded_ctranslate2_model is True:
+                try:
+                    self.ctranslate2_tokenizer.src_lang = source_language
+                    source = self.ctranslate2_tokenizer.convert_ids_to_tokens(self.ctranslate2_tokenizer.encode(message))
+                    match weight_type:
+                        case "m2m100_418M-ct2-int8" | "m2m100_1.2B-ct2-int8":
+                            target_prefix = [self.ctranslate2_tokenizer.lang_code_to_token[target_language]]
+                        case "nllb-200-distilled-600M-ct2-int8" | "nllb-200-distilled-1.3B-ct2-int8" | "nllb-200-3.3B-ct2-int8":
+                            target_prefix = [target_language]
+                        case _:
+                            return False
+                    results = self.ctranslate2_translator.translate_batch([source], target_prefix=[target_prefix])
+                    target = results[0].hypotheses[0][1:]
+                    result = self.ctranslate2_tokenizer.decode(self.ctranslate2_tokenizer.convert_tokens_to_ids(target))
+                except Exception:
+                    errorLogging()
         return result
 
     @staticmethod
@@ -405,27 +519,36 @@ class Translator:
         """Resolve a friendly language name to translator-specific codes.
 
         Returns (source_code, target_code).
+
+        Raises:
+            UnsupportedLanguageError: `source_language`/`target_language` is
+                not in this translator's supported language table.
         """
-        match translator_name:
-            case "DeepL_API":
-                if target_language == "English":
-                    if target_country in ["United States", "Canada", "Philippines"]:
-                        target_language = "English American"
-                    else:
-                        target_language = "English British"
-                elif target_language == "Portuguese":
-                    if target_country in ["Portugal"]:
-                        target_language = "Portuguese European"
-                    else:
-                        target_language = "Portuguese Brazilian"
-                source_language = translation_lang[translator_name]["source"][source_language]
-                target_language = translation_lang[translator_name]["target"][target_language]
-            case "CTranslate2":
-                source_language = translation_lang[translator_name][weight_type]["source"][source_language]
-                target_language = translation_lang[translator_name][weight_type]["target"][target_language]
-            case _:
-                source_language = translation_lang[translator_name]["source"][source_language]
-                target_language = translation_lang[translator_name]["target"][target_language]
+        try:
+            match translator_name:
+                case "DeepL_API":
+                    if target_language == "English":
+                        if target_country in ["United States", "Canada", "Philippines"]:
+                            target_language = "English American"
+                        else:
+                            target_language = "English British"
+                    elif target_language == "Portuguese":
+                        if target_country in ["Portugal"]:
+                            target_language = "Portuguese European"
+                        else:
+                            target_language = "Portuguese Brazilian"
+                    source_language = translation_lang[translator_name]["source"][source_language]
+                    target_language = translation_lang[translator_name]["target"][target_language]
+                case "CTranslate2":
+                    source_language = translation_lang[translator_name][weight_type]["source"][source_language]
+                    target_language = translation_lang[translator_name][weight_type]["target"][target_language]
+                case _:
+                    source_language = translation_lang[translator_name]["source"][source_language]
+                    target_language = translation_lang[translator_name]["target"][target_language]
+        except KeyError as e:
+            raise UnsupportedLanguageError(
+                f"{translator_name} does not support language {e} (source={source_language!r}, target={target_language!r})"
+            ) from e
         return source_language, target_language
 
     def translate(self, translator_name: str, weight_type: str, source_language: str, target_language: str, target_country: str, message: str, context_history: Optional[list[dict]] = None) -> Any:
@@ -440,24 +563,26 @@ class Translator:
             message: Text to translate
             context_history: Optional conversation context (Chat/Mic/Speaker messages)
 
-        Returns translated string on success, or False on failure. When
-        source_language == target_language the original message is returned.
+        Returns translated string on success. Returns None if the language
+        pair is not supported by this translator (not a backend failure).
+        Returns False on an actual backend failure (rate limit, network,
+        authentication, provider error). When source_language ==
+        target_language the original message is returned.
         """
         try:
             if source_language == target_language:
                 return message
 
-            result: Any = ""
+            # False, not "": every `case` below is guarded (engine disabled,
+            # client not authenticated, library missing), and an unknown
+            # translator_name matches no case at all. Any of those leaves this
+            # initial value untouched, and the caller decides success with
+            # `isinstance(translation, str)` - so "" would report an empty
+            # translation as a success, skipping the CTranslate2 fallback and
+            # the error log. False routes it through the fallback instead.
+            result: Any = False
             source_language, target_language = self.getLanguageCode(translator_name, weight_type, target_country, source_language, target_language)
             match translator_name:
-                case "DeepL":
-                    if self.is_enable_translators is True and other_web_Translator is not None:
-                        result = other_web_Translator(
-                            query_text=message,
-                            translator="deepl",
-                            from_language=source_language,
-                            to_language=target_language,
-                        )
                 case "DeepL_API":
                     if self.is_enable_translators is True:
                         if self.deepl_client is None:
@@ -468,57 +593,31 @@ class Translator:
                                 source_lang=source_language,
                                 target_lang=target_language
                                 ).text
-                case "Plamo_API":
-                    if self.plamo_client is None:
+                case name if name in TRANSLATION_PROVIDER_REGISTRY:
+                    # Plamo_API/Gemini_API/OpenAI_API/Groq_API/OpenRouter_API
+                    # (「認証キー+モデル一覧」型、フェーズ3項目17) は
+                    # クライアントのインターフェースが完全に同一なため、
+                    # 1つの分岐にまとめられる。OpenAI_Compatible は
+                    # base_url依存・別クラス継承のためレジストリ対象外
+                    # (下の専用 case のまま)。
+                    provider_client = self._provider_clients.get(name)
+                    if provider_client is None:
                         result = False
                     else:
                         if context_history:
-                            self.plamo_client.setContextHistory(context_history)
-                        result = self.plamo_client.translate(
+                            provider_client.setContextHistory(context_history)
+                        result = provider_client.translate(
                             message,
                             input_lang=source_language,
                             output_lang=target_language,
                             )
-                case "Gemini_API":
-                    if self.gemini_client is None:
+                case "OpenAI_Compatible":
+                    if self.openai_compatible_client is None:
                         result = False
                     else:
                         if context_history:
-                            self.gemini_client.setContextHistory(context_history)
-                        result = self.gemini_client.translate(
-                            message,
-                            input_lang=source_language,
-                            output_lang=target_language,
-                            )
-                case "OpenAI_API":
-                    if self.openai_client is None:
-                        result = False
-                    else:
-                        if context_history:
-                            self.openai_client.setContextHistory(context_history)
-                        result = self.openai_client.translate(
-                            message,
-                            input_lang=source_language,
-                            output_lang=target_language,
-                        )
-                case "Groq_API":
-                    if self.groq_client is None:
-                        result = False
-                    else:
-                        if context_history:
-                            self.groq_client.setContextHistory(context_history)
-                        result = self.groq_client.translate(
-                            message,
-                            input_lang=source_language,
-                            output_lang=target_language,
-                        )
-                case "OpenRouter_API":
-                    if self.openrouter_client is None:
-                        result = False
-                    else:
-                        if context_history:
-                            self.openrouter_client.setContextHistory(context_history)
-                        result = self.openrouter_client.translate(
+                            self.openai_compatible_client.setContextHistory(context_history)
+                        result = self.openai_compatible_client.translate(
                             message,
                             input_lang=source_language,
                             output_lang=target_language,
@@ -546,28 +645,31 @@ class Translator:
                             output_lang=target_language,
                         )
                 case "Google":
-                    if self.is_enable_translators is True and other_web_Translator is not None:
+                    if ENABLE_TRANSLATORS is True and other_web_Translator is not None:
                         result = other_web_Translator(
                             query_text=message,
                             translator="google",
                             from_language=source_language,
                             to_language=target_language,
+                            timeout=_WEB_TRANSLATOR_TIMEOUT_SECONDS,
                         )
                 case "Bing":
-                    if self.is_enable_translators is True and other_web_Translator is not None:
+                    if ENABLE_TRANSLATORS is True and other_web_Translator is not None:
                         result = other_web_Translator(
                             query_text=message,
                             translator="bing",
                             from_language=source_language,
                             to_language=target_language,
+                            timeout=_WEB_TRANSLATOR_TIMEOUT_SECONDS,
                         )
                 case "Papago":
-                    if self.is_enable_translators is True and other_web_Translator is not None:
+                    if ENABLE_TRANSLATORS is True and other_web_Translator is not None:
                         result = other_web_Translator(
                             query_text=message,
                             translator="papago",
                             from_language=source_language,
                             to_language=target_language,
+                            timeout=_WEB_TRANSLATOR_TIMEOUT_SECONDS,
                         )
                 case "CTranslate2":
                     result = self.translateCTranslate2(
@@ -576,6 +678,8 @@ class Translator:
                         target_language=target_language,
                         weight_type=weight_type,
                         )
+        except UnsupportedLanguageError:
+            result = None
         except Exception:
             errorLogging()
             result = False

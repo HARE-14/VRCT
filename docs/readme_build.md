@@ -54,7 +54,9 @@ npm run setup-python
 - `.venv` (CPU版) の作成と依存関係のインストール
 - `.venv_cuda` (CUDA版) の作成と依存関係のインストール
 
-> **注意**: CUDA版を使用する場合は、NVIDIAのGPUとCUDA Toolkit 12.8が必要です。
+> **注意**: CUDA版を使用する場合は、CUDA 12.8対応のNVIDIA GPUドライバーが必要です。
+> CUDA Toolkit のインストールは不要です。ctranslate2 が使う cuBLAS / cuDNN は
+> `requirements_cuda.txt` の `nvidia-*-cu12` wheel で入り、ビルド時に同梱されます。
 
 ## ビルドの種類
 
@@ -98,6 +100,48 @@ CPU版と同様ですが、CUDA対応のPythonバックエンドをビルドし�
 ```bash
 npm run dev-ui
 ```
+
+### 高速開発ビルド（推奨: 日常検証用）
+
+PyInstaller によるバックエンド再パッケージを毎回スキップし、仮想環境の
+Python を直接 sidecar として起動する高速ループです。Python コードを
+修正した検証も、プロセス再起動だけで反映されます（数分 → 数秒）。
+
+```bash
+# 標準環境: .venv/Scripts/python.exe
+npm run dev-fast
+
+# CUDA環境: .venv_cuda/Scripts/python.exe
+npm run dev-cuda-fast
+```
+
+どちらのコマンドも以下を実行します:
+
+1. 実行中のプロセスを終了 (`task-kill`)
+2. dev 用 sidecar ラッパー（`utils/dev_sidecar/`, Rust 製の薄いバイナリ）を
+   ビルドして `src-tauri/bin/` に配置 (`sidecar-dev`)
+3. Vite と Tauri の開発サーバー起動 (`dev-ui`)
+
+前提:
+
+- 選択した仮想環境と依存関係が準備済みであること
+  - `dev-fast`: `.venv/Scripts/python.exe`
+  - `dev-cuda-fast`: `.venv_cuda/Scripts/python.exe`（`.venv` は不要）
+- Rust ツールチェーン (`cargo`) が使えること（既に Tauri で必要）
+
+各コマンドが `VRCT_DEV_VENV` を設定し、Tauri 経由で dev 用 sidecar に
+使用する環境を渡します。選択した環境が存在しない場合はエラーで停止し、
+別の仮想環境への自動切り替えは行いません。環境の有効化（activate）は不要です。
+
+配布 EXE と同一挙動になる根拠:
+
+- Python コード側は `_internal/...` バンドルパスと開発ツリー相対パスの
+  両対応が入っており、venv 直起動でもリソース探索が正しく解決される
+  （`src-python/models/overlay/overlay_image.py` ほか）
+- Tauri 側の sidecar 起動ロジックは共通のまま（EXE ファイル名は不変）
+
+依存ライブラリを追加/更新した場合や、配布形式そのものを確認したい場合は
+従来の `npm run dev` / `npm run build` を使ってください。
 
 ## リリースビルド
 
@@ -317,6 +361,27 @@ npm run clean
 - `src-tauri/bin/`
 - `src-tauri/target/`
 
+Rust のインクリメンタルビルド結果 (`src-tauri/target/`) を残したい場合は
+`--soft` 版を使ってください:
+
+```bash
+npm run clean-soft
+```
+
+こちらは `build/`, `dist/`, `src-tauri/bin/` のみを削除します。
+
+### PyInstaller のオプション環境変数
+
+`build-python` / `build-python-cuda` は以下の環境変数で挙動を切り替えられます:
+
+- `VRCT_PYINSTALLER_CLEAN=1` — PyInstaller に `--clean` を渡し、
+  Analysis キャッシュを破棄してからビルド（依存追加時・リリース前確認用）。
+  既定では付与しないので、2 回目以降のビルドは Analysis キャッシュが効いて
+  数倍速くなります。
+- `VRCT_PYINSTALLER_UPX=1` — 生成物を UPX で圧縮（配布サイズを最小化したい
+  リリース時のみ）。既定は無効。UPX 圧縮はビルド時間と初回起動時間の両方を
+  伸ばすため、開発中は無効を推奨します。
+
 ### プロセスの強制終了
 
 ```bash
@@ -332,7 +397,8 @@ VRCT/
 ├── bat/                    # バッチスクリプト
 │   ├── build.bat          # CPU版Pythonビルド
 │   ├── build_cuda.bat     # CUDA版Pythonビルド
-│   └── install.bat        # Python環境セットアップ
+│   ├── install.bat        # Python環境セットアップ
+│   └── sidecar_dev.bat    # dev-fast用sidecarラッパービルド
 ├── spec/                   # PyInstallerスペックファイル
 │   ├── backend.spec       # CPU版ビルド設定
 │   └── backend_cuda.spec  # CUDA版ビルド設定
@@ -343,12 +409,13 @@ VRCT/
 ├── src-ui/               # Reactフロントエンドソースコード
 ├── utils/                # ユーティリティスクリプト
 │   ├── clean.py         # クリーンアップスクリプト
+│   ├── dev_sidecar/     # dev-fast用のvenv直起動ラッパー(Rust)
 │   ├── task_kill.py     # プロセス終了スクリプト
 │   ├── update_version.py # バージョン更新スクリプト
 │   └── zip.py           # ZIPパッケージング
 ├── package.json          # Node.js設定とバージョン管理
 ├── requirements.txt      # Python依存関係（CPU版）
-└── requirements_cuda.txt # Python依存関係（CUDA版）
+└── requirements_cuda.txt # Python依存関係（CUDA版。requirements.txt + CUDAライブラリ）
 ```
 
 ## トラブルシューティング
@@ -380,9 +447,11 @@ npm run build
 
 ### CUDA版が動作しない
 
-- CUDA Toolkit 12.8がインストールされているか確認
-- NVIDIA GPUドライバーが最新か確認
+- NVIDIA GPUドライバーが最新か確認（CUDA Toolkit のインストールは不要）
 - `requirements_cuda.txt` の依存関係が正しくインストールされているか確認
+- `.venv_cuda/Lib/site-packages/nvidia/{cublas,cudnn}/bin/` にDLLがあるか確認。
+  ctranslate2 はGPU実行時にここの `cublas64_12.dll` / `cudnn64_9.dll` を
+  実行時ロードする。無ければGPUは計算デバイス一覧に出ない
 
 ### プロセスが残っている
 
@@ -409,6 +478,59 @@ npm run task-kill
 1. `package.json` のバージョンを更新
 2. `npm run update-version` を実行
 3. 自動的に `tauri.conf.json` と `config.py` が更新される
+
+## β版リリース
+
+実際のリリースは `.github/workflows/release.yml` が `v*` タグのpushで自動実行しますが、
+タグ名に `-beta` または `-rc` を含めることで、公開先を本番と分離したβ版として配布できます。
+
+### リリース手順
+
+1. `package.json` の `version` を `3.5.0-beta.1` のようなpre-release識別子付きの値にする
+2. `npm run update-version` を実行(通常のビルド/リリースコマンド内で自動実行されるため手動実行は不要)
+3. `v3.5.0-beta.1` のようなタグを打ってpush
+
+```bash
+git tag v3.5.0-beta.1
+git push origin v3.5.0-beta.1
+```
+
+### 本番版との違い
+
+| 項目 | 本番版 (`v3.5.0`) | β版 (`v3.5.0-beta.1`) |
+|---|---|---|
+| GitHub Release | `prerelease: false` | `prerelease: true` |
+| Hugging Face公開先 | `ms-software/VRCT` | `ms-software/VRCT-beta` |
+| インストーラー(setup.exe)の既定ダウンロード元 | `ms-software/VRCT` | `ms-software/VRCT-beta`(バージョン文字列の `-beta`/`-rc` から自動判定、または `/CHANNEL=` 指定) |
+
+> **事前準備**: β用のHugging Faceリポジトリ `ms-software/VRCT-beta` は
+> CIでは自動作成されないため、初回は手動で作成しておく必要があります。
+
+### チャンネル切り替え・旧バージョンへのロールバック
+
+GitHub Releasesで配布されるsetup.exeは、実行時にHugging Faceから本体一式を
+ダウンロードするダウンローダー形式です。そのため、通常はGitHub Releasesの
+古いバージョンのsetup.exeを取得しても、その時点の最新版がインストールされてしまいます。
+
+チャンネル・バージョンの指定はGUI画面ではなく `/CHANNEL=` `/VERSION=` の
+CLI引数でのみ行えます(setup.exe自体はどのバージョン・チャンネルのものでも
+構いません)。setup.exeを単体でダブルクリックした場合はこれらの引数が付かない
+ため、CPU/GPU選択のみでビルド元チャンネルの最新版がインストールされます
+(GUI上に選択肢を増やさないための意図的な設計です)。VRCT本体のUpdaterタブ
+からの更新はこれらの引数を自動的に付与して起動します。
+
+```bash
+VRCT_setup.exe /CHANNEL=beta
+VRCT_setup.exe /VERSION=3.4.2
+```
+
+`/VERSION=` を指定した場合は、そのバージョン文字列に `-beta` または `-rc` が
+含まれるかどうかで自動的にダウンロード元リポジトリ(`ms-software/VRCT` /
+`ms-software/VRCT-beta`)を判定します(`/CHANNEL=` の指定より優先されます)。
+`/VERSION=` を指定しない場合は `/CHANNEL=`(省略時はこのsetup.exe自身が
+ビルドされたチャンネル)の最新版をダウンロードします。指定したバージョンが
+Hugging Face上に存在しない場合はダウンロードに失敗し、インストールが
+中断されます。
 
 ### リリースパッケージの内容
 

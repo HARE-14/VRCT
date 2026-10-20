@@ -150,25 +150,96 @@ Function PageChooseLanguage
     ${NSD_CB_AddString} $DropListLanguages "한국어"
     ${NSD_CB_AddString} $DropListLanguages "繁體中文"
     ${NSD_CB_AddString} $DropListLanguages "简体中文"
-    ${NSD_CB_SelectString} $DropListLanguages "English"
-    StrCpy $SelectedLangage "en"
+
+    ; Preselect based on /UILANG= (passed from the app when launched from
+    ; within VRCT). Falls back to English on first-time installs.
+    ${If} $UILang == "ja"
+        ${NSD_CB_SelectString} $DropListLanguages "日本語"
+        StrCpy $SelectedLangage "ja"
+    ${ElseIf} $UILang == "ko"
+        ${NSD_CB_SelectString} $DropListLanguages "한국어"
+        StrCpy $SelectedLangage "ko"
+    ${ElseIf} $UILang == "zh-Hant"
+        ${NSD_CB_SelectString} $DropListLanguages "繁體中文"
+        StrCpy $SelectedLangage "zh-Hant"
+    ${ElseIf} $UILang == "zh-Hans"
+        ${NSD_CB_SelectString} $DropListLanguages "简体中文"
+        StrCpy $SelectedLangage "zh-Hans"
+    ${Else}
+        ${NSD_CB_SelectString} $DropListLanguages "English"
+        StrCpy $SelectedLangage "en"
+    ${EndIf}
     nsDialogs::Show
 FunctionEnd
 
 Function PageLeaveChooseLanguage
+    ; When the user picks a language here, apply it to the rest of the
+    ; installer chrome too (Back/Next/Cancel etc.) by switching $LANGUAGE.
+    ; Pages already rendered before this one stay in their prior language;
+    ; subsequent MUI pages pick up the new $LANGUAGE at render time.
     ${NSD_GetText} $DropListLanguages $0
     ${If} "English" == $0
         StrCpy $SelectedLangage "en"
+        StrCpy $LANGUAGE ${LANG_ENGLISH}
     ${ElseIf} "日本語" == $0
         StrCpy $SelectedLangage "ja"
+        StrCpy $LANGUAGE ${LANG_JAPANESE}
     ${ElseIf} "한국어" == $0
         StrCpy $SelectedLangage "ko"
+        StrCpy $LANGUAGE ${LANG_KOREAN}
     ${ElseIf} "繁體中文" == $0
         StrCpy $SelectedLangage "zh-Hant"
+        StrCpy $LANGUAGE ${LANG_TRADCHINESE}
     ${ElseIf} "简体中文" == $0
         StrCpy $SelectedLangage "zh-Hans"
+        StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
     ${EndIf}
 FunctionEnd
+
+; 4-2. Choose CPU/GPU edition page
+Var RadioCpuEdition
+Var RadioGpuEdition
+Var DialogChooseEdition
+Var SelectedEdition
+Page custom PageChooseEdition PageLeaveChooseEdition
+Function PageChooseEdition
+    !insertmacro MUI_HEADER_TEXT "Initial Settings" "Choose the version of VRCT to install (can be changed later by reinstalling)."
+    nsDialogs::Create 1018
+    Pop $DialogChooseEdition
+
+    ${If} $DialogChooseEdition == error
+        Abort
+    ${EndIf}
+
+    ${NSD_CreateRadioButton} 0 20u 100% 12u "CPU version (smaller download, works on any PC)"
+    Pop $RadioCpuEdition
+    ${NSD_CreateRadioButton} 0 40u 100% 12u "GPU version (requires an NVIDIA GPU, larger download, faster recognition)"
+    Pop $RadioGpuEdition
+
+    ${If} $SelectedEdition == "gpu"
+        SendMessage $RadioGpuEdition ${BM_SETCHECK} ${BST_CHECKED} 0
+    ${Else}
+        SendMessage $RadioCpuEdition ${BM_SETCHECK} ${BST_CHECKED} 0
+    ${EndIf}
+
+    nsDialogs::Show
+FunctionEnd
+
+Function PageLeaveChooseEdition
+    ${NSD_GetState} $RadioGpuEdition $0
+    ${If} $0 == ${BST_CHECKED}
+        StrCpy $SelectedEdition "gpu"
+    ${Else}
+        StrCpy $SelectedEdition "cpu"
+    ${EndIf}
+FunctionEnd
+
+; Release channel (stable/beta) and specific-version pinning are controlled
+; only via the /CHANNEL= and /VERSION= CLI flags (set by VRCT's own Updater
+; tab -- see .onInit below and Section Install). Deliberately no GUI page
+; for these: a user who double-clicks setup.exe standalone just gets the
+; latest release of the channel this installer itself was published for,
+; with no extra decisions to make.
 
 !insertmacro MUI_PAGE_COMPONENTS
 
@@ -427,10 +498,67 @@ FunctionEnd
 !macroend
 
 Var PassiveMode
+Var TargetVersion
+Var UILang
+Var SelectedChannel
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   IfErrors +2 0
     StrCpy $PassiveMode 1
+
+  ; Preselect the CPU/GPU edition page when launched from within the app
+  ; (e.g. "/EDITION=gpu" from the in-app CPU/GPU switch button). The page
+  ; is still shown so the user can change their mind before installing.
+  ${GetOptions} $CMDLINE "/EDITION=" $0
+  IfErrors +2 0
+    StrCpy $SelectedEdition $0
+
+  ; Pin the downloaded app package to a specific released version instead of
+  ; always fetching the latest from the HF "main" revision (e.g.
+  ; "/VERSION=3.4.2" for rollback). Falls back to latest when omitted.
+  ${GetOptions} $CMDLINE "/VERSION=" $0
+  IfErrors +2 0
+    StrCpy $TargetVersion $0
+
+  ; Default the release channel page to whatever channel this very
+  ; installer was itself built/published for (a setup.exe downloaded from
+  ; the beta GitHub release has "-beta"/"-rc" baked into ${VERSION}), so a
+  ; standalone run without any flags still lands on a sensible default.
+  ${StrLoc} $0 "${VERSION}" "-beta" ">"
+  ${If} $0 == ""
+    ${StrLoc} $0 "${VERSION}" "-rc" ">"
+  ${EndIf}
+  ${If} $0 == ""
+    StrCpy $SelectedChannel "stable"
+  ${Else}
+    StrCpy $SelectedChannel "beta"
+  ${EndIf}
+
+  ; Launched from within the app (e.g. the user is on the beta channel and
+  ; clicks "reinstall"/"switch edition"): use VRCT's current channel setting
+  ; instead of the baked-in default above.
+  ${GetOptions} $CMDLINE "/CHANNEL=" $0
+  IfErrors +2 0
+    StrCpy $SelectedChannel $0
+
+  ; Preselect the UI language when launched from within the app (e.g.
+  ; "/UILANG=ja" from the in-app updater). Both the installer chrome
+  ; (via MUI_LANGDLL_REGISTRY_VALUENAME) and the initial value of the
+  ; custom PageChooseLanguage default to it. The page is still shown so
+  ; the user can change their mind before installing.
+  ${GetOptions} $CMDLINE "/UILANG=" $UILang
+  ClearErrors
+  ${If} $UILang == "en"
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" "1033"
+  ${ElseIf} $UILang == "ja"
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" "1041"
+  ${ElseIf} $UILang == "ko"
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" "1042"
+  ${ElseIf} $UILang == "zh-Hant"
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" "1028"
+  ${ElseIf} $UILang == "zh-Hans"
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" "2052"
+  ${EndIf}
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -535,6 +663,10 @@ Section WebView2
     DetailPrint "$(installingWebview2)"
     ; $6 holds the path to the webview2 installer
     ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+    ; The bootstrapper/offline installer is only needed for this invocation.
+    ; Remove it before handling the exit code so failure paths do not leave a
+    ; stale multi-megabyte installer in %TEMP% either.
+    Delete "$6"
     ${If} $1 == 0
       DetailPrint "$(webview2InstallSuccess)"
     ${Else}
@@ -583,34 +715,480 @@ SectionEnd
   app_check_done:
 !macroend
 
+Var /GLOBAL existing_install
+
 Section Install
-  SetOutPath $INSTDIR
+  ; Remember whether this is an update before SetOutPath can create the
+  ; directory.  A failed update must not remove an existing installation or
+  ; user data that the installer did not create.
+  StrCpy $existing_install "0"
+  ${If} ${FileExists} "$INSTDIR\uninstall.exe"
+  ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${OrIf} ${FileExists} "$INSTDIR\config.json"
+    StrCpy $existing_install "1"
+  ${EndIf}
 
   !insertmacro CheckIfAppIsRunning
 
   !addplugindir "..\..\..\..\nsis\plugins\x86-unicode"
   ; 指定のURLからファイルをダウンロード
-  !define SOFTWARE_RELEASE_URL "https://huggingface.co/ms-software/VRCT/resolve/main"
+  !define SOFTWARE_RELEASE_REPO "ms-software/VRCT"
+  !define SOFTWARE_RELEASE_REPO_BETA "ms-software/VRCT-beta"
   !define SOFTWARE_DOWNLOAD_FILENAME "VRCT.zip"
+  !define SOFTWARE_DOWNLOAD_FILENAME_GPU "VRCT_cuda.zip"
+
+  ; Free-space budget (MiB) per edition. The compressed archive is written to
+  ; %TEMP%, the extracted tree to $INSTDIR, and both exist at once during
+  ; extraction, so a same-drive install needs DOWNLOAD + EXTRACT together.
+  ; Measured 2026-08: VRCT.zip ~485MB / ~1.5GB unpacked; VRCT_cuda.zip
+  ; ~3461MB / ~5757MB unpacked. Values below add headroom -- re-measure and
+  ; bump them when the packages grow.
+  !define REQ_DOWNLOAD_MB_CPU 1024
+  !define REQ_EXTRACT_MB_CPU 3072
+  !define REQ_DOWNLOAD_MB_GPU 4096
+  !define REQ_EXTRACT_MB_GPU 7168
+
   Var /GLOBAL i
   Var /GLOBAL cmder_dl
   Var /GLOBAL cmder_version
   Var /GLOBAL file_name
-  StrCpy $file_name "${SOFTWARE_DOWNLOAD_FILENAME}"
+  Var /GLOBAL dl_retries
+  Var /GLOBAL dl_transfer_id
+  Var /GLOBAL dl_tick
+  Var /GLOBAL dl_percent
+  Var /GLOBAL dl_xfersize
+  Var /GLOBAL release_revision
+  Var /GLOBAL release_repo
+  Var /GLOBAL effective_version
+  Var /GLOBAL beta_marker_pos
+  Var /GLOBAL req_dl_mb
+  Var /GLOBAL req_extract_mb
+  Var /GLOBAL dl_total
+  Var /GLOBAL dl_parallel
+  Var /GLOBAL dl_id0
+  Var /GLOBAL dl_id1
+  Var /GLOBAL dl_id2
+  Var /GLOBAL dl_id3
+  Var /GLOBAL package_hash_path
+  Var /GLOBAL package_hash_id
+  Var /GLOBAL package_hash_available
+  Var /GLOBAL expected_package_hash
+  Var /GLOBAL actual_package_hash
+  ${If} $SelectedEdition == "gpu"
+    StrCpy $file_name "${SOFTWARE_DOWNLOAD_FILENAME_GPU}"
+    StrCpy $req_dl_mb ${REQ_DOWNLOAD_MB_GPU}
+    StrCpy $req_extract_mb ${REQ_EXTRACT_MB_GPU}
+  ${Else}
+    StrCpy $file_name "${SOFTWARE_DOWNLOAD_FILENAME}"
+    StrCpy $req_dl_mb ${REQ_DOWNLOAD_MB_CPU}
+    StrCpy $req_extract_mb ${REQ_EXTRACT_MB_CPU}
+  ${EndIf}
 
-  StrCpy $cmder_dl "${SOFTWARE_RELEASE_URL}/$file_name"
+  ; --- Pre-flight: refuse to start if either target volume is too small ---
+  ; $TEMP holds the download, $INSTDIR holds the extracted app. When they are
+  ; on the same volume the archive and the extracted tree must fit together.
+  ; DriveSpace returns "" on failure -> treat as "unknown" and don't block.
+  ${GetRoot} "$TEMP" $R0
+  ${GetRoot} "$INSTDIR" $R1
+  ${DriveSpace} "$R0\" "/D=F /S=M" $R2
+  ${DriveSpace} "$R1\" "/D=F /S=M" $R3
+  ${IfThen} $R2 == "" ${|} StrCpy $R2 -1 ${|}
+  ${IfThen} $R3 == "" ${|} StrCpy $R3 -1 ${|}
+
+  ${If} $R0 == $R1
+    IntOp $R4 $req_dl_mb + $req_extract_mb
+    ${If} $R2 >= 0
+    ${AndIf} $R2 < $R4
+      DetailPrint "Aborted: need $R4 MB free on $R0, only $R2 MB available"
+      MessageBox MB_OK|MB_ICONSTOP "Not enough free disk space on drive $R0 to install the $SelectedEdition version.$\r$\n$\r$\nRequired: about $R4 MB$\r$\nAvailable: $R2 MB$\r$\n$\r$\nFree up space (or pick an install folder on another drive) and run the installer again." /SD IDOK
+      Abort
+    ${EndIf}
+  ${Else}
+    ${If} $R2 >= 0
+    ${AndIf} $R2 < $req_dl_mb
+      DetailPrint "Aborted: need $req_dl_mb MB free on TEMP drive $R0, only $R2 MB available"
+      MessageBox MB_OK|MB_ICONSTOP "Not enough free space on the temporary-files drive $R0 to download the $SelectedEdition package.$\r$\n$\r$\nRequired: about $req_dl_mb MB$\r$\nAvailable: $R2 MB$\r$\n$\r$\nFree up space on $R0 and run the installer again." /SD IDOK
+      Abort
+    ${EndIf}
+    ${If} $R3 >= 0
+    ${AndIf} $R3 < $req_extract_mb
+      DetailPrint "Aborted: need $req_extract_mb MB free on install drive $R1, only $R3 MB available"
+      MessageBox MB_OK|MB_ICONSTOP "Not enough free space on the install drive $R1 for the $SelectedEdition version.$\r$\n$\r$\nRequired: about $req_extract_mb MB$\r$\nAvailable: $R3 MB$\r$\n$\r$\nFree up space (or choose another drive) and run the installer again." /SD IDOK
+      Abort
+    ${EndIf}
+  ${EndIf}
+
+  ; Pin to a specific released version's HF tag (e.g. "/VERSION=3.4.2" -> tag
+  ; "v3.4.2", or typed into the release-channel page) when requested for
+  ; rollback; otherwise fetch the latest from the selected channel's "main".
+  ${If} $TargetVersion != ""
+    StrCpy $release_revision "v$TargetVersion"
+    StrCpy $effective_version $TargetVersion
+
+    ; Beta versions (e.g. "3.5.0-beta.1") are published to a separate HF repo,
+    ; not the production one -- an explicit pinned version routes by its own
+    ; string, regardless of which channel radio button is selected, since a
+    ; given tag only ever exists in one of the two repos.
+    ${StrLoc} $beta_marker_pos $effective_version "-beta" ">"
+    ${If} $beta_marker_pos == ""
+      ${StrLoc} $beta_marker_pos $effective_version "-rc" ">"
+    ${EndIf}
+    ${If} $beta_marker_pos == ""
+      StrCpy $release_repo "${SOFTWARE_RELEASE_REPO}"
+    ${Else}
+      StrCpy $release_repo "${SOFTWARE_RELEASE_REPO_BETA}"
+    ${EndIf}
+  ${Else}
+    ; No specific version pinned -- fetch the latest from whichever channel
+    ; the user picked on the release-channel page.
+    StrCpy $release_revision "main"
+    ${If} $SelectedChannel == "beta"
+      StrCpy $release_repo "${SOFTWARE_RELEASE_REPO_BETA}"
+    ${Else}
+      StrCpy $release_repo "${SOFTWARE_RELEASE_REPO}"
+    ${EndIf}
+  ${EndIf}
+
+  StrCpy $cmder_dl "https://huggingface.co/$release_repo/resolve/$release_revision/$file_name"
   DetailPrint "Got URL : $cmder_dl"
 
-  DetailPrint "Downloading $file_name..."
-  inetc::get $cmder_dl "$TEMP\$file_name" /end
+  ; New releases publish a SHA-256 sidecar next to each package. Download it
+  ; before the large archive so a package can be rejected before extraction.
+  ; A missing sidecar is treated as a legacy release for backward-compatible
+  ; rollback support; other sidecar download failures are fatal.
+  StrCpy $package_hash_path "$TEMP\$file_name.sha256"
+  Delete "$package_hash_path"
+  StrCpy $package_hash_available "0"
+  DetailPrint "Downloading package checksum..."
+  NScurl::http GET "$cmder_dl.sha256" "$package_hash_path" /BACKGROUND /COMPLETETIMEOUT 30s /END
+  Pop $package_hash_id
+  NScurl::wait /ID $package_hash_id /END
+  NScurl::query /ID $package_hash_id "@ERROR@"
   Pop $0
-  StrCmp "$0" "OK" dlok
-  DetailPrint "Download Failed $0"
+  ${If} $0 == "OK"
+    ClearErrors
+    FileOpen $0 "$package_hash_path" r
+    IfErrors package_hash_file_invalid
+    FileRead $0 $expected_package_hash
+    IfErrors package_hash_read_invalid
+    FileClose $0
+    StrLen $1 $expected_package_hash
+    ${If} $1 != 64
+      Goto package_hash_invalid
+    ${EndIf}
+    StrCpy $package_hash_available "1"
+    DetailPrint "Package checksum downloaded"
+    Goto package_hash_ready
+  ${EndIf}
+
+  NScurl::query /ID $package_hash_id "@ERRORTYPE@|@ERRORCODE@"
+  Pop $1
+  ${If} $1 == "HTTP|404"
+    DetailPrint "Package checksum is unavailable; using legacy size-only validation"
+    Delete "$package_hash_path"
+    Goto package_hash_ready
+  ${EndIf}
+  DetailPrint "Could not download package checksum ($1)"
+  Delete "$package_hash_path"
+  MessageBox MB_OK|MB_ICONSTOP "Could not download the package checksum. Installation was aborted to protect the integrity of the downloaded package." /SD IDOK
   Abort
 
-  dlok:
-  DetailPrint "Extracting $file_name ..."
-  nsisunz::UnzipToStack "$TEMP\$file_name" $INSTDIR
+  package_hash_file_invalid:
+    Delete "$package_hash_path"
+    DetailPrint "Package checksum could not be read"
+    MessageBox MB_OK|MB_ICONSTOP "The package checksum could not be read. Installation was aborted to protect the integrity of the downloaded package." /SD IDOK
+    Abort
+
+  package_hash_read_invalid:
+    FileClose $0
+    Delete "$package_hash_path"
+    DetailPrint "Package checksum could not be read"
+    MessageBox MB_OK|MB_ICONSTOP "The package checksum could not be read. Installation was aborted to protect the integrity of the downloaded package." /SD IDOK
+    Abort
+
+  package_hash_invalid:
+    Delete "$package_hash_path"
+    DetailPrint "Package checksum is invalid"
+    MessageBox MB_OK|MB_ICONSTOP "The package checksum is invalid. Installation was aborted to protect the integrity of the downloaded package." /SD IDOK
+    Abort
+
+  package_hash_ready:
+
+  ; The archive is unpacked with Windows' bundled bsdtar (see below). Bail out
+  ; early with a clear message if it is missing rather than downloading GBs
+  ; first only to fail at the end. This installer is 32-bit, so $SYSDIR is
+  ; WOW64-redirected to SysWOW64 (no tar.exe there) -- disable redirection so
+  ; the check and the later call both reach the real System32.
+  ${DisableX64FSRedirection}
+  ${If} ${FileExists} "$SYSDIR\tar.exe"
+    StrCpy $R0 "ok"
+  ${Else}
+    StrCpy $R0 "missing"
+  ${EndIf}
+  ${EnableX64FSRedirection}
+  ${If} $R0 == "missing"
+    DetailPrint "Cannot continue: tar.exe is missing from System32 (requires Windows 10 1803 or later)"
+    MessageBox MB_OK|MB_ICONSTOP "This installer needs the tar tool built into Windows 10 version 1803 (April 2018) and later.$\r$\n$\r$\nPlease update Windows, then run the installer again." /SD IDOK
+    Abort
+  ${EndIf}
+
+  ; Probe the total size so the download can be split into byte ranges.
+  ; $SYSDIR\curl.exe shares tar.exe's Windows baseline (checked above); if the
+  ; probe fails, $dl_total stays "0" and a single stream is used instead.
+  StrCpy $dl_total "0"
+  ${DisableX64FSRedirection}
+  nsExec::ExecToStack '"$SYSDIR\curl.exe" -sIL --fail --retry 2 -o NUL -w "%header{content-length}" "$cmder_dl"'
+  Pop $0
+  Pop $1
+  ${EnableX64FSRedirection}
+  ${If} $0 == 0
+    System::Int64Op $1 + 0        ; keep leading digits, drop any trailing CR/LF
+    Pop $dl_total
+  ${EndIf}
+
+  ; Use the parallel path only when the size is known AND the download volume
+  ; can clearly hold the parts + the reassembled archive + the extracted tree
+  ; at once (2x archive during "copy /b" + the unpacked size + margin). On a
+  ; tighter disk, or if any parallel part fails at runtime, we fall back to a
+  ; single stream (1x archive) which the pre-flight check above already sized.
+  StrCpy $dl_parallel "0"
+  ${If} $dl_total != "0"
+    ${GetRoot} "$TEMP" $R0
+    ${DriveSpace} "$R0\" "/D=F /S=M" $R1
+    System::Int64Op $dl_total / 524288      ; = 2 * archive size in MiB
+    Pop $R2
+    IntOp $R2 $R2 + $req_extract_mb
+    IntOp $R2 $R2 + 1024                    ; margin
+    ${If} $R1 != ""
+    ${AndIf} $R1 > $R2
+      StrCpy $dl_parallel "1"
+    ${EndIf}
+  ${EndIf}
+
+  ; Download + extract is retried as a single unit: a transfer the downloader
+  ; reports as OK can still be truncated (the HuggingFace CDN does this on
+  ; multi-GB files), which only surfaces when the unpack fails. So on ANY
+  ; failure (download error, or an unpack that yields no ${MAINBINARYNAME}.exe)
+  ; we wipe the archive and pull a completely fresh copy.
+  StrCpy $dl_retries 0
+  install_attempt:
+    Delete "$TEMP\$file_name"
+    Delete "$TEMP\$file_name.p0"
+    Delete "$TEMP\$file_name.p1"
+    Delete "$TEMP\$file_name.p2"
+    Delete "$TEMP\$file_name.p3"
+
+    ${If} $dl_parallel != "1"
+      ; -------- Single connection (size unknown, tight disk, or retry) --------
+      DetailPrint "Downloading $file_name..."
+      NScurl::http GET "$cmder_dl" "$TEMP\$file_name" /INSIST /RESUME /BACKGROUND /END
+      Pop $dl_transfer_id
+      StrCpy $dl_tick 0
+      StrCpy $R4 0
+      download_wait:
+        Sleep 1000
+        NScurl::query /ID $dl_transfer_id "@STATUS@"
+        Pop $0
+        ${If} $0 == "Complete"
+          Goto single_download_done
+        ${ElseIf} $0 == "Waiting"
+        ${OrIf} $0 == "Running"
+          IntOp $R4 $R4 + 1
+          IntOp $dl_tick $dl_tick + 1
+          ${If} $dl_tick >= 5
+            StrCpy $dl_tick 0
+            NScurl::query /ID $dl_transfer_id "@PERCENT@"
+            Pop $dl_percent
+            NScurl::query /ID $dl_transfer_id "@XFERSIZE@"
+            Pop $dl_xfersize
+            DetailPrint "Downloading $file_name... $dl_xfersize ($dl_percent%)"
+          ${EndIf}
+          ${If} $R4 >= 3600
+            DetailPrint "Download timed out"
+            Goto attempt_failed
+          ${EndIf}
+          Goto download_wait
+        ${Else}
+          DetailPrint "Download stopped with status $0"
+          Goto attempt_failed
+        ${EndIf}
+      single_download_done:
+      NScurl::wait /ID $dl_transfer_id /END
+      NScurl::query /ID $dl_transfer_id "@ERROR@"
+      Pop $0
+      ${If} $0 != "OK"
+        DetailPrint "Download failed ($0)"
+        Goto attempt_failed
+      ${EndIf}
+    ${Else}
+      ; -------- 4 byte ranges pulled concurrently, then reassembled --------
+      ; $R0 = chunk, $R2 = 2*chunk (part2 start), $R3 = 3*chunk (part3 start),
+      ; $R1 = scratch (range end), $R4 = watchdog tick. The last range is
+      ; open-ended so it always covers the remainder.
+      DetailPrint "Downloading $file_name (4 parallel connections)..."
+      System::Int64Op $dl_total / 4
+      Pop $R0
+      System::Int64Op $R0 - 1
+      Pop $R1
+      NScurl::http GET "$cmder_dl" "$TEMP\$file_name.p0" /HEADER "Range: bytes=0-$R1" /INSIST /BACKGROUND /END
+      Pop $dl_id0
+      System::Int64Op $R0 * 2
+      Pop $R2
+      System::Int64Op $R2 - 1
+      Pop $R1
+      NScurl::http GET "$cmder_dl" "$TEMP\$file_name.p1" /HEADER "Range: bytes=$R0-$R1" /INSIST /BACKGROUND /END
+      Pop $dl_id1
+      System::Int64Op $R0 * 3
+      Pop $R3
+      System::Int64Op $R3 - 1
+      Pop $R1
+      NScurl::http GET "$cmder_dl" "$TEMP\$file_name.p2" /HEADER "Range: bytes=$R2-$R1" /INSIST /BACKGROUND /END
+      Pop $dl_id2
+      NScurl::http GET "$cmder_dl" "$TEMP\$file_name.p3" /HEADER "Range: bytes=$R3-" /INSIST /BACKGROUND /END
+      Pop $dl_id3
+
+      StrCpy $dl_tick 0
+      StrCpy $R4 0
+      par_wait:
+        Sleep 1000
+        IntOp $R4 $R4 + 1
+        NScurl::query /ID $dl_id0 "@STATUS@"
+        Pop $1
+        NScurl::query /ID $dl_id1 "@STATUS@"
+        Pop $2
+        NScurl::query /ID $dl_id2 "@STATUS@"
+        Pop $3
+        NScurl::query /ID $dl_id3 "@STATUS@"
+        Pop $4
+        ${If} $1 == "Aborted"
+        ${OrIf} $2 == "Aborted"
+        ${OrIf} $3 == "Aborted"
+        ${OrIf} $4 == "Aborted"
+          DetailPrint "A download connection was aborted"
+          Goto par_failed
+        ${EndIf}
+        ${If} $R4 > 3600
+          DetailPrint "Download timed out"
+          Goto par_failed
+        ${EndIf}
+        IntOp $dl_tick $dl_tick + 1
+        ${If} $dl_tick >= 3
+          StrCpy $dl_tick 0
+          NScurl::query /ID $dl_id0 "@XFERSIZE_B@"
+          Pop $5
+          NScurl::query /ID $dl_id1 "@XFERSIZE_B@"
+          Pop $6
+          System::Int64Op $5 + $6
+          Pop $5
+          NScurl::query /ID $dl_id2 "@XFERSIZE_B@"
+          Pop $6
+          System::Int64Op $5 + $6
+          Pop $5
+          NScurl::query /ID $dl_id3 "@XFERSIZE_B@"
+          Pop $6
+          System::Int64Op $5 + $6
+          Pop $5
+          System::Int64Op $5 / 1048576
+          Pop $7
+          System::Int64Op $5 * 100
+          Pop $8
+          System::Int64Op $8 / $dl_total
+          Pop $8
+          System::Int64Op $dl_total / 1048576
+          Pop $9
+          DetailPrint "Downloading $file_name... $7 / $9 MB ($8%)"
+        ${EndIf}
+        StrCmp "$1$2$3$4" "CompleteCompleteCompleteComplete" par_done 0
+        Goto par_wait
+      par_done:
+      NScurl::query /ID $dl_id0 "@ERROR@"
+      Pop $1
+      NScurl::query /ID $dl_id1 "@ERROR@"
+      Pop $2
+      NScurl::query /ID $dl_id2 "@ERROR@"
+      Pop $3
+      NScurl::query /ID $dl_id3 "@ERROR@"
+      Pop $4
+      ${If} $1 != "OK"
+      ${OrIf} $2 != "OK"
+      ${OrIf} $3 != "OK"
+      ${OrIf} $4 != "OK"
+        DetailPrint "Parallel download failed ($1 / $2 / $3 / $4)"
+        Goto par_failed
+      ${EndIf}
+      DetailPrint "Combining parts..."
+      nsExec::ExecToLog 'cmd /c copy /b "$TEMP\$file_name.p0"+"$TEMP\$file_name.p1"+"$TEMP\$file_name.p2"+"$TEMP\$file_name.p3" "$TEMP\$file_name"'
+      Pop $0
+      ${If} $0 != 0
+        DetailPrint "Could not combine downloaded parts (exit $0)"
+        Goto par_failed
+      ${EndIf}
+      Delete "$TEMP\$file_name.p0"
+      Delete "$TEMP\$file_name.p1"
+      Delete "$TEMP\$file_name.p2"
+      Delete "$TEMP\$file_name.p3"
+      Goto par_ok
+    par_failed:
+      ; A parallel part failed (often disk-write pressure from 4 concurrent
+      ; writers). Drop to a single connection for the remaining attempts.
+      DetailPrint "Retrying with a single connection..."
+      StrCpy $dl_parallel "0"
+      Goto attempt_failed
+    par_ok:
+    ${EndIf}
+
+    ${If} $package_hash_available == "1"
+      NScurl::sha256 -file "$TEMP\$file_name"
+      Pop $actual_package_hash
+      ${If} $actual_package_hash != $expected_package_hash
+        DetailPrint "Package SHA-256 mismatch"
+        Delete "$TEMP\$file_name"
+        Delete "$package_hash_path"
+        MessageBox MB_OK|MB_ICONSTOP "The downloaded package failed SHA-256 verification. Installation was aborted." /SD IDOK
+        Abort
+      ${EndIf}
+      DetailPrint "Package SHA-256 verified"
+    ${EndIf}
+    Delete "$package_hash_path"
+
+    DetailPrint "Extracting $file_name ..."
+    ; NSIS unzip plugins (nsisunz, and Nsis7z regardless of its embedded 7-Zip
+    ; version) use 32-bit file I/O in their glue code and silently fail on
+    ; multi-GB archives -- that is what broke the GPU install. Shell out to
+    ; Windows' bundled bsdtar instead: a real 64-bit process that reads Zip64
+    ; and returns a usable exit code. Verified on VRCT_cuda.zip (Zip64, 4985
+    ; entries, ~5.8GB unpacked). -v prints each file as it is written so the
+    ; details view scrolls during extraction instead of sitting on
+    ; "Extracting ..." until done.
+    SetOutPath $INSTDIR
+    ${DisableX64FSRedirection}
+    nsExec::ExecToLog '"$SYSDIR\tar.exe" -xvf "$TEMP\$file_name" -C "$INSTDIR"'
+    Pop $0
+    ${EnableX64FSRedirection}
+    ${If} $0 == 0
+    ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+      Goto install_ready
+    ${EndIf}
+    DetailPrint "Unpack failed (tar exit $0; $INSTDIR\${MAINBINARYNAME}.exe missing) -- archive likely corrupt"
+
+  attempt_failed:
+    IntOp $dl_retries $dl_retries + 1
+    ${If} $dl_retries < 3
+      DetailPrint "Retrying download + unpack ($dl_retries/3)..."
+      Goto install_attempt
+    ${EndIf}
+    ; Keep the last (bad) archive instead of deleting it, so the failure can
+    ; be diagnosed from %TEMP%.
+    Delete "$TEMP\$file_name.bad"
+    Rename "$TEMP\$file_name" "$TEMP\$file_name.bad"
+    DetailPrint "Giving up after 3 attempts; kept archive at $TEMP\$file_name.bad"
+    Call CleanupFailedInstall
+    MessageBox MB_OK|MB_ICONSTOP "Could not download and unpack $file_name after 3 attempts.$\r$\n$\r$\nYour connection may be unstable or the disk may be full. The last download was kept for troubleshooting at:$\r$\n$TEMP\$file_name.bad$\r$\n$\r$\nPlease try again later." /SD IDOK
+    Abort
+
+  install_ready:
+  ; The archive is no longer needed once it is unpacked; reclaim the space.
+  Delete "$TEMP\$file_name"
 
   ; Create uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -660,6 +1238,41 @@ Section Install
   ${IfThen} $PassiveMode == 1 ${|} SetAutoClose true ${|}
 SectionEnd
 
+Function CleanupFailedInstall
+  ; Keep the .bad archive for diagnostics, but remove temporary fragments and
+  ; the checksum sidecar regardless of whether this was a new install or an
+  ; update.
+  Delete "$TEMP\$file_name"
+  Delete "$TEMP\$file_name.p0"
+  Delete "$TEMP\$file_name.p1"
+  Delete "$TEMP\$file_name.p2"
+  Delete "$TEMP\$file_name.p3"
+  Delete "$package_hash_path"
+
+  ; Updating in place can leave a mixture of old and new files after a failed
+  ; extraction.  Without a staging directory or rollback manifest, preserving
+  ; the existing tree is safer than deleting user data or the previous app.
+  ${If} $existing_install == "1"
+    DetailPrint "Existing installation preserved after failure"
+    Return
+  ${EndIf}
+
+  ; For a new install, remove only files owned by the generated installer.
+  ; User data is intentionally not targeted here.
+  Delete "$INSTDIR\${MAINBINARYNAME}.exe"
+  {{#each resources}}
+    Delete "$INSTDIR\\{{this.[1]}}"
+  {{/each}}
+  {{#each binaries}}
+    Delete "$INSTDIR\\{{this}}"
+  {{/each}}
+  RmDir /r "$INSTDIR\_internal"
+  {{#each resources_ancestors}}
+    RMDir "$INSTDIR\\{{this}}"
+  {{/each}}
+  RMDir "$INSTDIR"
+FunctionEnd
+
 Function .onInstSuccess
   ; Check for `/R` flag only in silent and passive installers because
   ; GUI installer has a toggle for the user to (re)start the app
@@ -673,9 +1286,17 @@ Function .onInstSuccess
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
   run_done:
 
-  StrCpy $1 '{"UI_LANGUAGE": "$SelectedLangage"}'
-  FileOpen $0 "$INSTDIR\config.json" w
-  FileWrite $0 $1
+  ; インストーラで選んだ UI 言語を config.json に直接書き込まない。
+  ; config.json は Python 側が UTF-8 (BOM無し、ensure_ascii=False) で書くため
+  ; 日本語等の非ASCII文字を含み得るが、NSIS の nsJSON プラグインでこれを
+  ; 読み込むと実機で確実にパース失敗することを診断ログで確認した
+  ; (2026-08-21)。そのため NSIS 側では JSON を一切パースせず、選択言語
+  ; コード (常に ASCII: en/ja/ko/zh-Hant/zh-Hans) だけを書いた単純なテキスト
+  ; マーカーファイルを置く。実際の config.json への反映は起動時に Python 側
+  ; (config.py の load_config) が行う — 既に動作実績のある json 読み書き
+  ; パスをそのまま使えるため、エンコーディング起因の失敗が起こらない。
+  FileOpen $0 "$INSTDIR\installer_language.txt" w
+  FileWrite $0 "$SelectedLangage"
   FileClose $0
 FunctionEnd
 
@@ -735,26 +1356,32 @@ Section Uninstall
     Delete "$INSTDIR\\{{this}}"
   {{/each}}
 
-  ; Dlete config.json
-  Delete "$INSTDIR\config.json"
+  ; ユーザーデータ (config.json / ログ / weights) は既定では保持する。
+  ; 上書きインストール時 (PageLeaveReinstall が既存 uninstaller を呼ぶ) にも
+  ; この Section が実行されるため、無条件削除すると全設定が失われる。
+  ; 完全削除は「Delete AppData」チェックが入った場合のみ。
+  ${If} $DeleteAppDataCheckboxState == 1
+    Delete "$INSTDIR\config.json"
+    Delete "$INSTDIR\process.log"
+    Delete "$INSTDIR\error.log"
+    Delete "$INSTDIR\crash_trace.log"
+    Delete "$INSTDIR\freeze_trace.log"
+    Delete "$INSTDIR\telemetry_state.json"
+    RmDir /r "$INSTDIR\logs"
+    RmDir /r "$INSTDIR\weights"
+  ${EndIf}
 
-  ; Delete process.log
-  Delete "$INSTDIR\process.log"
-
-  ; Delete errror.log
-  Delete "$INSTDIR\error.log"
+  ; インストーラが起動時 UI 言語受け渡し用に置くマーカーファイル。
+  ; ユーザー設定ではなく一度きりの信号ファイルなので DeleteAppData の
+  ; 有無に関わらず常に削除する (アプリを一度も起動せずアンインストール
+  ; された場合、Python 側の消費・自己削除が走らず残るケアも兼ねる)。
+  Delete "$INSTDIR\installer_language.txt"
 
   ; Delete update.exe
   Delete "$INSTDIR\update.exe"
 
-  ; Delete _internal folder
+  ; Delete _internal folder (アプリ本体の一部なので常に削除)
   RmDir /r "$INSTDIR\_internal"
-
-  ; Delete log folder
-  RmDir /r "$INSTDIR\logs"
-
-  ; Delete weights folder
-  RmDir /r "$INSTDIR\weights"
 
   ; Delete uninstaller
   Delete "$INSTDIR\uninstall.exe"

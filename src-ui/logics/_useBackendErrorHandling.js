@@ -3,6 +3,7 @@ import { useI18n } from "@useI18n";
 import {
     useNotificationStatus,
     useLLMConnection,
+    useIsSoftwareUpdating,
 } from "@logics_common";
 
 import {
@@ -23,6 +24,7 @@ import { ui_configs } from "./ui_configs";
 export const _useBackendErrorHandling = () => {
     const { t } = useI18n();
     const { showNotification_Error } = useNotificationStatus();
+    const { updateIsSoftwareUpdating } = useIsSoftwareUpdating();
 
     const {
         updateMicRecordTimeout,
@@ -34,7 +36,7 @@ export const _useBackendErrorHandling = () => {
         updateSpeakerMaxWords,
     } = useTranscription();
 
-    const { updateTranslationStatus, updateTranscriptionSendStatus, updateTranscriptionReceiveStatus } = useMainFunction();
+    const { updateTranslationStatus, updateTranscriptionSendStatus, updateTranscriptionReceiveStatus, updateOcrCaptureStatus } = useMainFunction();
 
     const {
         updateDeepLAuthKey,
@@ -57,6 +59,10 @@ export const _useBackendErrorHandling = () => {
         updateLMStudioURL,
         updateSelectedLMStudioModel,
 
+        updateOpenAICompatibleURL,
+        updateOpenAICompatibleAuthKey,
+        updateSelectedOpenAICompatibleModel,
+
         updateSelectedOllamaModel,
     } = useTranslation();
 
@@ -64,9 +70,19 @@ export const _useBackendErrorHandling = () => {
 
     const {
         updateOscIpAddress,
+        updateOscPort,
         updateEnableWebsocket,
         updateWebsocketHost,
         updateWebsocketPort,
+        updateEnableObsBrowserSource,
+        updateObsBrowserSourcePort,
+        updateObsBrowserSourceMaxMessages,
+        updateObsBrowserSourceDisplayDuration,
+        updateObsBrowserSourceFadeoutDuration,
+        updateObsBrowserSourceFontSize,
+        updateObsBrowserSourceFontColor,
+        updateObsBrowserSourceFontOutlineThickness,
+        updateObsBrowserSourceFontOutlineColor,
     } = useAdvancedSettings();
 
     const {
@@ -120,6 +136,29 @@ export const _useBackendErrorHandling = () => {
                 return;
 
             // ============================================================================
+            // OCR関連エラー (OCR_*)  開始できずバックエンドより強制的にOFFへ戻る
+            // ============================================================================
+            case "OCR_DISABLED_ENGINE_UNAVAILABLE":
+                updateOcrCaptureStatus(data);
+                // OCRエンジン、または必要なファイルが見つからないため
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OCR_DISABLED_MODEL_LOAD_FAILED":
+                updateOcrCaptureStatus(data);
+                // モデルの読み込みに失敗したため
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OCR_DISABLED_UNSUPPORTED_LANGUAGE":
+                updateOcrCaptureStatus(data);
+                // 選択中の読み取り言語には対応していないため
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OCR_DISABLED_UNKNOWN":
+                updateOcrCaptureStatus(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+
+            // ============================================================================
             // ウェイトダウンロード関連エラー (WEIGHT_*)
             // ============================================================================
             case "WEIGHT_CTRANSLATE2_DOWNLOAD":
@@ -127,6 +166,19 @@ export const _useBackendErrorHandling = () => {
                 return;
             case "WEIGHT_WHISPER_DOWNLOAD":
                 showNotification_Error(t("common_error.failed_download_weight_whisper"), { category_id: error_code });
+                return;
+
+            // ============================================================================
+            // ソフトウェア更新関連エラー (UPDATE_*)
+            // ============================================================================
+            case "UPDATE_SOFTWARE_DOWNLOAD":
+                // インストーラを起動できなかった。更新中の表示のまま待ち続けないよう戻す
+                updateIsSoftwareUpdating(false);
+                showNotification_Error(t("common_error.failed_update_software"), { category_id: error_code });
+                return;
+            case "UPDATE_SOFTWARE_VERIFY":
+                updateIsSoftwareUpdating(false);
+                showNotification_Error(t("common_error.failed_update_software_verify"), { category_id: error_code });
                 return;
 
             // ============================================================================
@@ -164,7 +216,15 @@ export const _useBackendErrorHandling = () => {
                 return;
             case "VALIDATION_INVALID_IP":
             case "VALIDATION_CANNOT_SET_IP":
-                updateOscIpAddress(data);
+                if (endpoint === "/set/data/websocket_host") {
+                    updateWebsocketHost(data);
+                } else if (endpoint === "/set/data/osc_ip_address") {
+                    updateOscIpAddress(data);
+                }
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "VALIDATION_OSC_PORT_INVALID":
+                updateOscPort(data);
                 showNotification_Error(message, { category_id: error_code });
                 return;
 
@@ -204,6 +264,11 @@ export const _useBackendErrorHandling = () => {
                 updateOpenRouterAuthKey(data);
                 showNotification_Error(message, { category_id: error_code });
                 return;
+            case "AUTH_OPENAI_COMPATIBLE_INVALID":
+            case "AUTH_OPENAI_COMPATIBLE_FAILED":
+                updateOpenAICompatibleAuthKey(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
 
             // ============================================================================
             // モデル選択エラー (MODEL_*)
@@ -232,6 +297,10 @@ export const _useBackendErrorHandling = () => {
                 updateSelectedLMStudioModel(data);
                 showNotification_Error(message, { category_id: error_code });
                 return;
+            case "MODEL_OPENAI_COMPATIBLE_INVALID":
+                updateSelectedOpenAICompatibleModel(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
             case "MODEL_OLLAMA_INVALID":
                 updateSelectedOllamaModel(data);
                 showNotification_Error(message, { category_id: error_code });
@@ -252,6 +321,10 @@ export const _useBackendErrorHandling = () => {
                 updateLMStudioURL(data);
                 showNotification_Error(message, { category_id: error_code });
                 return;
+            case "CONNECTION_OPENAI_COMPATIBLE_URL_INVALID":
+                updateOpenAICompatibleURL(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
 
             // ============================================================================
             // WebSocketエラー (WEBSOCKET_*)
@@ -261,12 +334,57 @@ export const _useBackendErrorHandling = () => {
                 showNotification_Error(message, { category_id: error_code });
                 return;
             case "WEBSOCKET_PORT_UNAVAILABLE":
+            case "WEBSOCKET_PORT_INVALID":
                 updateWebsocketPort(data);
                 showNotification_Error(message, { category_id: error_code });
                 return;
             case "WEBSOCKET_SERVER_UNAVAILABLE":
                 updateEnableWebsocket(data);
                 showNotification_Error(message, { category_id: error_code });
+                return;
+
+            // ============================================================================
+            // OBS Browser Sourceエラー (OBS_BROWSER_SOURCE_*)
+            // ============================================================================
+            case "OBS_BROWSER_SOURCE_HOST_UNAVAILABLE":
+                updateWebsocketHost(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_PORT_UNAVAILABLE":
+                updateObsBrowserSourcePort(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_SERVER_UNAVAILABLE":
+                updateEnableObsBrowserSource(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_MAX_MESSAGES_INVALID":
+                updateObsBrowserSourceMaxMessages(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_DISPLAY_DURATION_INVALID":
+                updateObsBrowserSourceDisplayDuration(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_FADEOUT_DURATION_INVALID":
+                updateObsBrowserSourceFadeoutDuration(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_FONT_SIZE_INVALID":
+                updateObsBrowserSourceFontSize(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_FONT_COLOR_INVALID":
+                updateObsBrowserSourceFontColor(data);
+                showNotification_Error(t("common_error.invalid_hex_color", { brand_color_hex: ui_configs.brand_color_hex }), { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_FONT_OUTLINE_THICKNESS_INVALID":
+                updateObsBrowserSourceFontOutlineThickness(data);
+                showNotification_Error(message, { category_id: error_code });
+                return;
+            case "OBS_BROWSER_SOURCE_FONT_OUTLINE_COLOR_INVALID":
+                updateObsBrowserSourceFontOutlineColor(data);
+                showNotification_Error(t("common_error.invalid_hex_color", { brand_color_hex: ui_configs.brand_color_hex }), { category_id: error_code });
                 return;
 
             // ============================================================================

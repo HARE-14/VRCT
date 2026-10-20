@@ -1,4 +1,5 @@
 import { createAtomWithHook } from "@store";
+import vr_layout from "../../../views/vr/vr_layout.json";
 
 import {
     ctranslate2_weight_type_status,
@@ -60,6 +61,16 @@ export const SETTINGS_ARRAY = [
         add_endpoint_run_array: ["from_backend"],
         base_endpoint_name: "selected_mic_device",
     },
+    // UI上は感度設定のラジオボタン（VAD/自動/手動）の一部として扱われるが、
+    // バックエンド側はリスト形式ではなく単独のON/OFFエンドポイント（/set/enable, /set/disable）のため例外的に"toggle"として定義
+    {
+        Category: "Device",
+        Base_Name: "MicVadFilter",
+        default_value: false,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "mic_vad_filter",
+    },
     {
         Category: "Device",
         Base_Name: "EnableAutomaticMicThreshold",
@@ -102,6 +113,16 @@ export const SETTINGS_ARRAY = [
         logics_template_id: "get_set",
         add_endpoint_run_array: ["from_backend"],
         base_endpoint_name: "selected_speaker_device",
+    },
+    // UI上は感度設定のラジオボタン（VAD/自動/手動）の一部として扱われるが、
+    // バックエンド側はリスト形式ではなく単独のON/OFFエンドポイント（/set/enable, /set/disable）のため例外的に"toggle"として定義
+    {
+        Category: "Device",
+        Base_Name: "SpeakerVadFilter",
+        default_value: false,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "speaker_vad_filter",
     },
     {
         Category: "Device",
@@ -399,6 +420,42 @@ export const SETTINGS_ARRAY = [
         add_endpoint_run_array: ["from_backend"],
         base_endpoint_name: "selected_lmstudio_model",
     },
+    // OpenAI Compatible (URL + Auth Key)
+    {
+        Category: "Translation",
+        Base_Name: "OpenAICompatibleURL",
+        default_value: "https://api.openai.com/v1",
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "openai_compatible_url",
+    },
+    {
+        Category: "Translation",
+        Base_Name: "OpenAICompatibleAuthKey",
+        default_value: "",
+        ui_template_id: "input",
+        logics_template_id: "get_set_delete",
+        base_endpoint_name: "openai_compatible_auth_key",
+    },
+    {
+        Category: "Translation",
+        Base_Name: "SelectableOpenAICompatibleModelList",
+        default_value: [],
+        ui_template_id: "list",
+        logics_template_id: "get_set",
+        add_endpoint_run_array: ["from_backend"],
+        base_endpoint_name: "selectable_openai_compatible_model_list",
+        response_transform: "arrayToObject",
+    },
+    {
+        Category: "Translation",
+        Base_Name: "SelectedOpenAICompatibleModel",
+        default_value: "",
+        ui_template_id: "select",
+        logics_template_id: "get_set",
+        add_endpoint_run_array: ["from_backend"],
+        base_endpoint_name: "selected_openai_compatible_model",
+    },
     // Ollama
     {
         Category: "Translation",
@@ -572,6 +629,57 @@ export const SETTINGS_ARRAY = [
         base_endpoint_name: "speaker_no_speech_prob",
     },
 
+    // OCR
+    {
+        Category: "Ocr",
+        Base_Name: "OcrWindowTitle",
+        default_value: "VRChat",
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "ocr_window_title",
+    },
+    {
+        Category: "Ocr",
+        Base_Name: "SelectableOcrSourceLanguageList",
+        default_value: [],
+        ui_template_id: "list",
+        logics_template_id: "get_set",
+        base_endpoint_name: "selectable_ocr_source_languages",
+        response_transform: "arrayToObject",
+    },
+    {
+        Category: "Ocr",
+        Base_Name: "OcrSourceLanguage",
+        default_value: "auto",
+        ui_template_id: "select",
+        logics_template_id: "get_set",
+        base_endpoint_name: "ocr_source_language",
+    },
+    {
+        Category: "Ocr",
+        Base_Name: "OcrPollIntervalMs",
+        default_value: 750,
+        ui_template_id: "slider",
+        logics_template_id: "get_set",
+        base_endpoint_name: "ocr_poll_interval_ms",
+    },
+    {
+        Category: "Ocr",
+        Base_Name: "OcrMinConfidence",
+        default_value: 0.85,
+        ui_template_id: "slider",
+        logics_template_id: "get_set",
+        base_endpoint_name: "ocr_min_confidence",
+    },
+    {
+        Category: "Ocr",
+        Base_Name: "OcrBubbleMinTextLength",
+        default_value: 2,
+        ui_template_id: "slider",
+        logics_template_id: "get_set",
+        base_endpoint_name: "ocr_bubble_min_text_length",
+    },
+
     // Vr
     {
         Category: "Vr",
@@ -587,6 +695,7 @@ export const SETTINGS_ARRAY = [
         default_value: ui_configs.overlay_small_log_default_settings,
         ui_template_id: "object",
         logics_template_id: "get_set",
+        add_endpoint_run_array: ["from_backend"],
         base_endpoint_name: "overlay_small_log_settings",
     },
     {
@@ -603,6 +712,7 @@ export const SETTINGS_ARRAY = [
         default_value: ui_configs.overlay_large_log_default_settings,
         ui_template_id: "object",
         logics_template_id: "get_set",
+        add_endpoint_run_array: ["from_backend"],
         base_endpoint_name: "overlay_large_log_settings",
     },
     {
@@ -612,6 +722,91 @@ export const SETTINGS_ARRAY = [
         ui_template_id: "toggle",
         logics_template_id: "toggle_enable_disable",
         base_endpoint_name: "overlay_show_only_translated_messages",
+    },
+    {
+        // VR UI (手首のランチャーと各ウィンドウ)。字幕のオーバーレイとは別にON/OFFする
+        Category: "Vr",
+        Base_Name: "IsEnabledOverlayVrPanel",
+        default_value: false,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "overlay_vr_panel",
+    },
+    {
+        // VR UIのログウィンドウの固定先 (Playspace / LeftHand / RightHand / HMD)。操作バーで変える。
+        // 掴みや呼び戻しで変わったときもバックエンドから届く
+        Category: "Vr",
+        Base_Name: "OverlayVrPanelAnchor",
+        default_value: "Playspace",
+        ui_template_id: "select",
+        logics_template_id: "get_set",
+        add_endpoint_run_array: ["from_backend"],
+        base_endpoint_name: "overlay_vr_panel_anchor",
+    },
+    {
+        // VR UIのログウィンドウのロック (掴めなくする)。操作バーで変える
+        Category: "Vr",
+        Base_Name: "OverlayVrPanelLocked",
+        default_value: false,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "overlay_vr_panel_locked",
+    },
+    {
+        // VR UIのログの文字の大きさ (14〜28px)。操作バーの A−／A＋ で変える
+        Category: "Vr",
+        Base_Name: "OverlayVrPanelFontSize",
+        default_value: 17,
+        ui_template_id: "slider",
+        logics_template_id: "get_set",
+        base_endpoint_name: "overlay_vr_panel_font_size",
+    },
+    {
+        // VR画面の並び (ログの大きさで変わる)。Python (models/overlay) が決めて知らせる。既定は vr_layout.json
+        Category: "Vr",
+        Base_Name: "VrPanelLayout",
+        default_value: vr_layout,
+        ui_template_id: "object",
+        logics_template_id: "get_only",
+        add_endpoint_run_array: ["from_backend"],
+        base_endpoint_name: "vr_panel_layout",
+    },
+    {
+        // VR UIのランチャーを付ける手 (LeftHand / RightHand)。VR設定で変える
+        Category: "Vr",
+        Base_Name: "OverlayVrLauncherHand",
+        default_value: "LeftHand",
+        ui_template_id: "select",
+        logics_template_id: "get_set",
+        add_endpoint_run_array: ["from_backend"], // 「ランチャーを初期に戻す」で左手に戻ったときも届く
+        base_endpoint_name: "overlay_vr_launcher_hand",
+    },
+    {
+        // VR UIのランチャーを手首を見たときだけ出す
+        Category: "Vr",
+        Base_Name: "OverlayVrLauncherAutoHide",
+        default_value: true,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "overlay_vr_launcher_auto_hide",
+    },
+    {
+        // VR UIのボタンを指したときの吹き出し (操作名と状態)
+        Category: "Vr",
+        Base_Name: "OverlayVrTooltip",
+        default_value: true,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "overlay_vr_tooltip",
+    },
+    {
+        // VR UIのログウィンドウの不透明度 (0.2〜1.0)。VR設定ウィンドウでだけ変える
+        Category: "Vr",
+        Base_Name: "OverlayVrPanelOpacity",
+        default_value: 1.0,
+        ui_template_id: "slider",
+        logics_template_id: "get_set",
+        base_endpoint_name: "overlay_vr_panel_opacity",
     },
     {
         Category: "Vr",
@@ -719,6 +914,14 @@ export const SETTINGS_ARRAY = [
         logics_template_id: "toggle_enable_disable",
         base_endpoint_name: "telemetry",
     },
+    {
+        Category: "Updater",
+        Base_Name: "ReleaseChannel",
+        default_value: "stable",
+        ui_template_id: "select",
+        logics_template_id: "get_set",
+        base_endpoint_name: "release_channel",
+    },
 
     // AdvancedSettings
     {
@@ -760,6 +963,86 @@ export const SETTINGS_ARRAY = [
         ui_template_id: "input",
         logics_template_id: "get_set",
         base_endpoint_name: "websocket_port",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "WebsocketAuthToken",
+        default_value: "",
+        ui_template_id: "input",
+        logics_template_id: "get_only",
+        base_endpoint_name: "websocket_auth_token",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "EnableObsBrowserSource",
+        default_value: false,
+        ui_template_id: "toggle",
+        logics_template_id: "toggle_enable_disable",
+        base_endpoint_name: "obs_browser_source",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourcePort",
+        default_value: 2232,
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_port",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceMaxMessages",
+        default_value: 14,
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_max_messages",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceDisplayDuration",
+        default_value: 60,
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_display_duration",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceFadeoutDuration",
+        default_value: 12,
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_fadeout_duration",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceFontSize",
+        default_value: 40,
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_font_size",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceFontColor",
+        default_value: "#FFFFFF",
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_font_color",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceFontOutlineThickness",
+        default_value: 3,
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_font_outline_thickness",
+    },
+    {
+        Category: "AdvancedSettings",
+        Base_Name: "ObsBrowserSourceFontOutlineColor",
+        default_value: "#000000",
+        ui_template_id: "input",
+        logics_template_id: "get_set",
+        base_endpoint_name: "obs_browser_source_font_outline_color",
     },
 
 ];

@@ -284,7 +284,7 @@ config.MIC_THRESHOLD = 1500
 ```python
 # 翻訳エンジンの設定
 engines = config.SELECTED_TRANSLATION_ENGINES
-engines["1"] = "DeepL"
+engines["1"] = "DeepL_API"
 config.SELECTED_TRANSLATION_ENGINES = engines
 
 # オーバーレイ設定の変更
@@ -312,7 +312,7 @@ config.saveConfig("ENABLE_TRANSLATION", True, immediate_save=True)
     "UI_SCALING": 100,
     "ENABLE_TRANSLATION": true,
     "SELECTED_TRANSLATION_ENGINES": {
-        "1": "DeepL",
+        "1": "DeepL_API",
         "2": "Google",
         "3": "CTranslate2"
     },
@@ -374,7 +374,7 @@ config.saveConfig("ENABLE_TRANSLATION", True, immediate_save=True)
 
 ### オプション依存関係
 - `device_manager`: デバイス情報取得
-- `torch`: CUDA計算デバイス情報
+- `utils.getComputeDeviceList`: CUDA計算デバイス情報 (`COMPUTE_MODE` もこの結果から導出)
 - 各種モデルモジュール: 言語・エンジン情報
 
 ## エラーハンドリング
