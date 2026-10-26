@@ -328,6 +328,22 @@ class UpdateGrabFlowTest(unittest.TestCase):
         self.overlay.images["small"].putpixel((50, 50), (255, 255, 255, 255))
         self.assertEqual(self.overlay.pointingOverlay(np.eye(4))[0], "small")
 
+    def test_faded_out_log_is_not_grabbed(self):
+        """消えきったログは指してグリップしても掴まない。消えていく途中なら掴める。"""
+        self.overlay.settings["small"]["fadeout_duration"] = 1
+        self.overlay.fadeRatio["small"] = 0.0
+        self.assertEqual(self.overlay.pointingOverlay(np.eye(4)), (None, None))
+        self.grip = True
+        self.overlay.updateGrab()
+        self.overlay.updateGrab()
+        self.assertIsNone(self.overlay.grabbing)
+
+        self.grip = False
+        self.overlay.updateGrab()
+        self.overlay.fadeRatio["small"] = 0.3
+        self._grab(None)
+        self.assertEqual(self.overlay.fadeRatio["small"], 1.0)
+
 
 class PanelInputTest(unittest.TestCase):
     """VRパネルへの入力: トリガーのクリック判定とスクロール。"""

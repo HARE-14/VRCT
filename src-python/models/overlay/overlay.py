@@ -1923,12 +1923,13 @@ class Overlay:
     def pointingOverlay(self, pose: np.ndarray, poseOf: Optional[Callable[[int], Optional[np.ndarray]]] = None) -> tuple:
         """Return (size, intersection results) of the overlay the controller ray hits, or (None, None).
 
-        フェードアウトした(見えない)オーバーレイも対象にする: グリップで起こして掴めるように。
+        フェードアウトしきった (見えない) ログは対象にしない。VRChat でグリップしたとき見えない大きいログが
+        掴まれ、目線の 79° 下に置かれて保存されたことがある。
         画像の透明な部分と、VR UI の領域の見えている範囲の外 (poseOf があるとき) は対象にしない。
         """
         best = (None, None)
         for size in self.settings.keys():
-            if self.settings[size]["opacity"] <= 0 or size in self.vr_windows_hidden:
+            if not self.isVisible(size) or size in self.vr_windows_hidden:
                 continue
             if size == LAUNCHER and not self.launcher_interactive:
                 continue
@@ -2208,7 +2209,7 @@ class Overlay:
             overlay_pose = self.overlayWorldPose(size, poseOf)
             if overlay_pose is None:
                 continue
-            self.wakeOverlay(size)  # フェード済みでもグリップで起こす
+            self.wakeOverlay(size)  # 消えかけていても掴んだら濃さを戻す
             self.grabbing = (size, hand, np.linalg.inv(hand_pose) @ overlay_pose)
             head = poseOf(openvr.k_unTrackedDeviceIndex_Hmd)
             on_sphere = self.settings[size]["tracker"] in (PLAYSPACE, "HMD") and head is not None
