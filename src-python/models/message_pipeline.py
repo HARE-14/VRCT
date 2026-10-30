@@ -63,7 +63,8 @@ class MessageDirectionSpec:
     osc_send_gate_attr: Optional[str]
     osc_format_type: str  # "SEND" | "RECEIVED" (messageFormatterへ渡す)
     overlay_direction: str  # "send" | "receive" (createOverlayImageLargeLogへ渡す)
-    overlay_small_log: bool  # speakerのみTrue (受信専用の簡易オーバーレイ)
+    overlay_small_log: bool  # 受信専用の簡易オーバーレイ
+    overlay_large_log: bool
     clipboard: bool  # micのみTrue
     ws_type: str  # "SENT" | "RECEIVED" | "CHAT"
     ws_src_languages_attr: str
@@ -92,6 +93,7 @@ MIC_MESSAGE_SPEC = MessageDirectionSpec(
     osc_format_type="SEND",
     overlay_direction="send",
     overlay_small_log=False,
+    overlay_large_log=True,
     clipboard=True,
     ws_type="SENT",
     ws_src_languages_attr="SELECTED_YOUR_LANGUAGES",
@@ -115,6 +117,7 @@ SPEAKER_MESSAGE_SPEC = MessageDirectionSpec(
     osc_format_type="RECEIVED",
     overlay_direction="receive",
     overlay_small_log=True,
+    overlay_large_log=False,
     clipboard=False,
     ws_type="RECEIVED",
     ws_src_languages_attr="SELECTED_TARGET_LANGUAGES",
@@ -141,8 +144,8 @@ OCR_MESSAGE_SPEC = MessageDirectionSpec(
     osc_send_gate_attr=None,
     osc_format_type="RECEIVED",
     overlay_direction="receive",
-    # 小さいオーバーレイは音声の受信専用。OCRは大きいログにのみ出す。
-    overlay_small_log=False,
+    overlay_small_log=True,
+    overlay_large_log=False,
     clipboard=False,
     ws_type="RECEIVED",
     ws_src_languages_attr="SELECTED_TARGET_LANGUAGES",
@@ -167,6 +170,7 @@ CHAT_MESSAGE_SPEC = MessageDirectionSpec(
     osc_format_type="SEND",
     overlay_direction="send",
     overlay_small_log=False,
+    overlay_large_log=True,
     clipboard=False,
     ws_type="CHAT",
     ws_src_languages_attr="SELECTED_YOUR_LANGUAGES",

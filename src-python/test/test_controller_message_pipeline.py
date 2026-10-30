@@ -435,13 +435,12 @@ class TestSpeakerMessage(_MessagePipelineTestBase):
         self.controller.speakerMessage({"text": "hello", "language": "English"})
         self._model.updateOverlaySmallLog.assert_not_called()
 
-    def test_large_log_overlay_direction_is_receive(self) -> None:
+    def test_large_log_overlay_is_not_used(self) -> None:
         config.OVERLAY_LARGE_LOG = True
         self.controller._is_overlay_available = lambda: True
         self._model.getOutputTranslate.return_value = (["hola"], [True])
         self.controller.speakerMessage({"text": "hello", "language": "English"})
-        args = self._model.createOverlayImageLargeLog.call_args.args
-        self.assertEqual(args[0], "receive")
+        self._model.updateOverlayLargeLog.assert_not_called()
 
     def test_no_clipboard_step_for_speaker(self) -> None:
         # speakerMessage は clipboard 機能を一切持たない (mic だけの機能)。
@@ -744,14 +743,13 @@ class TestOcrMessage(_MessagePipelineTestBase):
         self.controller.ocrMessage({"text": "hello", "language": ""})
         self.assertIsNone(self._model.getOutputTranslate.call_args.kwargs["source_language"])
 
-    def test_does_not_use_the_small_overlay(self) -> None:
-        # 小さいオーバーレイは音声の受信専用。
+    def test_uses_only_the_small_overlay(self) -> None:
         config.OVERLAY_SMALL_LOG = True
         config.OVERLAY_LARGE_LOG = True
         self.controller._is_overlay_available = lambda: True
         self.controller.ocrMessage({"text": "こんにちは", "language": "Japanese"})
-        self._model.updateOverlaySmallLog.assert_not_called()
-        self._model.updateOverlayLargeLog.assert_called_once()
+        self._model.updateOverlaySmallLog.assert_called_once()
+        self._model.updateOverlayLargeLog.assert_not_called()
 
     def test_history_is_recorded_as_ocr(self) -> None:
         self.controller.ocrMessage({"text": "こんにちは", "language": "Japanese"})

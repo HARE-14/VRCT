@@ -1164,7 +1164,7 @@ class Controller:
                     )
                     model.updateOverlaySmallLog(overlay_image)
 
-            if config.OVERLAY_LARGE_LOG is True and self._is_overlay_available():
+            if spec.overlay_large_log and config.OVERLAY_LARGE_LOG is True and self._is_overlay_available():
                 if spec.overlay_direction == "send":
                     overlay_own_language = config.SELECTED_YOUR_LANGUAGES[config.SELECTED_TAB_NO]["1"]["language"]
                     overlay_language_list = config.SELECTED_TARGET_LANGUAGES[config.SELECTED_TAB_NO]
