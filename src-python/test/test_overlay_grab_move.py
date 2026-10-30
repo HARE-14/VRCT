@@ -144,7 +144,7 @@ class UpdateGrabFlowTest(unittest.TestCase):
         import openvr
         settings = {k: 0.0 for k in KEYS}
         settings.update(tracker="LeftHand", opacity=1.0, fadeout_duration=0, z_pos=0.0, ui_scaling=1.0)
-        self.overlay = Overlay({"small": settings})
+        self.overlay = Overlay({"window": settings})
         self.grip = False
         self.trigger = False
         self.right_z = 0.0  # 右手の位置 (z)。前方は -Z
@@ -187,7 +187,7 @@ class UpdateGrabFlowTest(unittest.TestCase):
 
         self.overlay.overlay_system = system
         self.overlay.overlay = ovr
-        self.overlay.handle = {"small": 10}
+        self.overlay.handle = {"window": 10}
         self.overlay.pointer_handles = {"dot": 11, "plus": 12, "minus": 13}
         self.callback = MagicMock()
         self.overlay.position_changed_callback = self.callback
@@ -212,7 +212,7 @@ class UpdateGrabFlowTest(unittest.TestCase):
         """頭のトラッキングが一瞬切れても、掴んでいる空間固定のウィンドウは跳ばず、放せばその位置で確定する。"""
         from unittest.mock import patch
 
-        settings = dict(self.overlay.settings["small"], tracker="Playspace", z_pos=1.0, width=900, height=700)
+        settings = dict(self.overlay.settings["window"], tracker="Playspace", z_pos=1.0, width=900, height=700)
         overlay = Overlay({PANEL: settings})
         overlay.overlay_system, overlay.overlay = self.overlay.overlay_system, self.overlay.overlay
         overlay.handle = {PANEL: 10}
@@ -244,7 +244,7 @@ class UpdateGrabFlowTest(unittest.TestCase):
         """ログの大きさの切り替え中は、表示と VR画面の並びが合っていないのでクリックを送らない。"""
         from unittest.mock import patch
 
-        settings = dict(self.overlay.settings["small"], width=900, height=700)
+        settings = dict(self.overlay.settings["window"], width=900, height=700)
         overlay = Overlay({PANEL: settings})
         overlay.overlay_system, overlay.overlay = self.overlay.overlay_system, self.overlay.overlay
         overlay.handle = {PANEL: 10}
@@ -303,7 +303,7 @@ class UpdateGrabFlowTest(unittest.TestCase):
     def test_trigger_push_forward_scales_up_and_saves_width(self):
         from unittest.mock import patch
         t = [100.0]
-        self.overlay.settings["small"]["ui_scaling"] = 1.0
+        self.overlay.settings["window"]["ui_scaling"] = 1.0
         with patch("models.overlay.overlay.time.monotonic", side_effect=lambda: t[0]):
             self._grab(t)
             self.trigger = True
@@ -311,7 +311,7 @@ class UpdateGrabFlowTest(unittest.TestCase):
             self.right_z = -0.15  # 前へ15cm押し出す → 2倍
             self.overlay.updateGrab()
             self.overlay.overlay.showOverlay.assert_called_with(12)  # + アイコン
-            self.assertAlmostEqual(self.overlay.settings["small"]["ui_scaling"], 2.0, places=5)
+            self.assertAlmostEqual(self.overlay.settings["window"]["ui_scaling"], 2.0, places=5)
             self.trigger = False
             self.overlay.updateGrab()  # 掴み直し
             self.grip = False
@@ -321,17 +321,32 @@ class UpdateGrabFlowTest(unittest.TestCase):
 
     def test_transparent_area_is_not_pointed(self):
         from PIL import Image
-        self.overlay.images["small"] = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+        self.overlay.images["window"] = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
         hit = self.overlay.overlay.computeOverlayIntersection.return_value[1]
         hit.vUVs.v = [0.5, 0.5]
         self.assertEqual(self.overlay.pointingOverlay(np.eye(4)), (None, None))
-        self.overlay.images["small"].putpixel((50, 50), (255, 255, 255, 255))
-        self.assertEqual(self.overlay.pointingOverlay(np.eye(4))[0], "small")
+        self.overlay.images["window"].putpixel((50, 50), (255, 255, 255, 255))
+        self.assertEqual(self.overlay.pointingOverlay(np.eye(4))[0], "window")
 
-    def test_faded_out_log_is_not_grabbed(self):
-        """消えきったログは指してグリップしても掴まない。消えていく途中なら掴める。"""
-        self.overlay.settings["small"]["fadeout_duration"] = 1
-        self.overlay.fadeRatio["small"] = 0.0
+    def test_subtitles_are_not_grabbed_even_when_visible(self):
+        for size in ("small", "large"):
+            overlay = Overlay({size: dict(self.overlay.settings["window"])})
+            overlay.overlay_system = self.overlay.overlay_system
+            overlay.overlay = self.overlay.overlay
+            overlay.handle = {size: 10}
+            overlay.pointer_handles = self.overlay.pointer_handles
+            self.grip = False
+            self.assertTrue(overlay.isVisible(size))
+            self.assertEqual(overlay.pointingOverlay(np.eye(4)), (None, None))
+            overlay.updateGrab()
+            self.grip = True
+            overlay.updateGrab()
+            self.assertIsNone(overlay.grabbing)
+
+    def test_faded_out_window_is_not_grabbed(self):
+        """消えきったウィンドウは指してグリップしても掴まない。消えていく途中なら掴める。"""
+        self.overlay.settings["window"]["fadeout_duration"] = 1
+        self.overlay.fadeRatio["window"] = 0.0
         self.assertEqual(self.overlay.pointingOverlay(np.eye(4)), (None, None))
         self.grip = True
         self.overlay.updateGrab()
@@ -340,9 +355,9 @@ class UpdateGrabFlowTest(unittest.TestCase):
 
         self.grip = False
         self.overlay.updateGrab()
-        self.overlay.fadeRatio["small"] = 0.3
+        self.overlay.fadeRatio["window"] = 0.3
         self._grab(None)
-        self.assertEqual(self.overlay.fadeRatio["small"], 1.0)
+        self.assertEqual(self.overlay.fadeRatio["window"], 1.0)
 
 
 class PanelInputTest(unittest.TestCase):
@@ -1292,7 +1307,7 @@ class PanelLockTest(unittest.TestCase):
 
     def setUp(self):
         UpdateGrabFlowTest.setUp(self)  # 偽の SteamVR だけ借りる (テストは継がない)
-        settings = dict(self.overlay.settings["small"], tracker="Playspace")
+        settings = dict(self.overlay.settings["window"], tracker="Playspace")
         overlay = Overlay({PANEL: settings})
         overlay.overlay_system = self.overlay.overlay_system
         overlay.overlay = self.overlay.overlay

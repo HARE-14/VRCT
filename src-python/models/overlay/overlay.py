@@ -128,6 +128,7 @@ POPUP = "popup"
 # ログウィンドウの下の操作バー (XSOverlay と同じ位置)。settings には入れない (位置はログに付いて動き、保存もしない)
 TOOLBAR = "toolbar"
 TOOLTIP = "tooltip"
+_SUBTITLE_SIZES = ("small", "large")
 # ログウィンドウの大きさ (論理px)。角を掴んで伸ばせる範囲と既定
 PANEL_DEFAULT_SIZE = (900, 700)
 PANEL_SIZE_RANGE = ((600, 400), (1400, 1000))
@@ -1929,7 +1930,7 @@ class Overlay:
         """
         best = (None, None)
         for size in self.settings.keys():
-            if not self.isVisible(size) or size in self.vr_windows_hidden:
+            if size in _SUBTITLE_SIZES or not self.isVisible(size) or size in self.vr_windows_hidden:
                 continue
             if size == LAUNCHER and not self.launcher_interactive:
                 continue
